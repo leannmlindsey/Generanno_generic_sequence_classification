@@ -85,7 +85,7 @@ SLURM scripts are provided in `slurm_scripts/` for running on HPC clusters (conf
 2. Submit: `bash wrapper_run_generanno_csv.sh`
 3. For interactive testing: `bash run_generanno_csv_interactive.sh`
 
-### 4. Embedding Analysis
+### 5. Embedding Analysis
 
 Extract embeddings and evaluate their quality with linear probes, silhouette scores, PCA visualization, and a 3-layer NN:
 
@@ -102,7 +102,7 @@ python -m src.tasks.downstream.embedding_analysis \
 - `pca_visualization.png`: PCA plot showing class separation
 - `embedding_analysis_results.json`: Linear probe metrics, 3-layer NN metrics, silhouette score
 
-### 5. Inference
+### 6. Inference
 
 Run inference on a CSV file to get predictions with probabilities for threshold analysis:
 
@@ -117,7 +117,7 @@ python -m src.tasks.downstream.inference \
 
 **Output CSV columns:** `sequence`, `label`, `prob_0`, `prob_1`, `pred_label`
 
-### 6. Test Results
+### 7. Test Results
 
 After training, comprehensive test metrics are saved to `test_results.json`:
 - `eval_accuracy`, `eval_precision`, `eval_recall`, `eval_f1`
