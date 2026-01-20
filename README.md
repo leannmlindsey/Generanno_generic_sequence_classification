@@ -4,7 +4,107 @@
   </picture>
 </p>
 
-<h1 align="center">GENERanno: A Genomic Foundation Model for Metagenomic Annotation</h1>
+<h1 align="center">GENERanno Generic Sequence Classification</h1>
+
+> **Note:** This is a fork of the [original GENERanno repository](https://github.com/GenerTeam/GENERanno) with added support for **generic CSV-based binary/multiclass classification** tasks. This allows you to fine-tune GENERanno on your own DNA sequence classification datasets.
+
+---
+
+## Fine-tuning on Custom CSV Datasets
+
+This fork adds the ability to fine-tune on any classification task using simple CSV files.
+
+### 1. Prepare Your Data
+
+Create a directory containing three CSV files with `sequence` and `label` columns:
+
+```
+my_dataset/
+├── train.csv
+├── dev.csv    # (or val.csv)
+└── test.csv
+```
+
+Each CSV should have this format:
+```csv
+sequence,label
+ACGTACGTACGT...,0
+TGCATGCATGCA...,1
+GGCCAATTGGCC...,0
+```
+
+- `sequence`: DNA sequence (A, C, G, T, N characters)
+- `label`: Integer class label (0, 1 for binary; 0, 1, 2, ... for multiclass)
+
+### 2. Run Fine-tuning
+
+```bash
+python -m src.tasks.downstream.sequence_understanding \
+    --csv_dir="/path/to/my_dataset" \
+    --model_name="GenerTeam/GENERanno-prokaryote-0.5b-base" \
+    --output_dir="./results/my_task" \
+    --batch_size=16 \
+    --max_length=8192 \
+    --learning_rate=1e-5 \
+    --d_output=2 \
+    --seed=42 \
+    --main_metrics="mcc"
+```
+
+### 3. SLURM Scripts (for HPC)
+
+SLURM scripts are provided in `slurm_scripts/` for running on HPC clusters (configured for NIH Biowulf):
+
+1. Edit `wrapper_run_generanno_csv.sh` with your paths
+2. Submit: `bash wrapper_run_generanno_csv.sh`
+3. For interactive testing: `bash run_generanno_csv_interactive.sh`
+
+### 4. Embedding Analysis
+
+Extract embeddings and evaluate their quality with linear probes, silhouette scores, PCA visualization, and a 3-layer NN:
+
+```bash
+python -m src.tasks.downstream.embedding_analysis \
+    --csv_dir="/path/to/csv/data" \
+    --model_path="GenerTeam/GENERanno-prokaryote-0.5b-base" \
+    --output_dir="./results/embedding_analysis" \
+    --pooling="mean"
+```
+
+**Outputs:**
+- `embeddings.npz`: Extracted embeddings for train/val/test sets
+- `pca_visualization.png`: PCA plot showing class separation
+- `embedding_analysis_results.json`: Linear probe metrics, 3-layer NN metrics, silhouette score
+
+### 5. Inference
+
+Run inference on a CSV file to get predictions with probabilities for threshold analysis:
+
+```bash
+python -m src.tasks.downstream.inference \
+    --input_csv="/path/to/test.csv" \
+    --model_path="/path/to/finetuned/model" \
+    --output_csv="/path/to/predictions.csv" \
+    --threshold=0.5 \
+    --save_metrics
+```
+
+**Output CSV columns:** `sequence`, `label`, `prob_0`, `prob_1`, `pred_label`
+
+### 6. Test Results
+
+After training, comprehensive test metrics are saved to `test_results.json`:
+- `eval_accuracy`, `eval_precision`, `eval_recall`, `eval_f1`
+- `eval_mcc`: Matthews Correlation Coefficient (computed on full test set)
+- `eval_sensitivity`, `eval_specificity`, `eval_auc`
+
+---
+
+## Original GENERanno README
+
+The remainder of this README is from the [original GENERanno repository](https://github.com/GenerTeam/GENERanno).
+
+---
 
 ## 📰 News
 
@@ -147,114 +247,6 @@ torchrun --nnodes=${NUM_NODES} \
     src/tasks/downstream/sequence_understanding.py \
     --distributed_type deepspeed # or fsdp
 ```
-
-#### Custom CSV Binary Classification
-
-You can fine-tune GENERanno on your own binary classification task using CSV files.
-
-**CSV Format Requirements:**
-- Three files in a directory: `train.csv`, `dev.csv` (or `val.csv`), `test.csv`
-- Required columns: `sequence` (DNA sequence) and `label` (0 or 1 for binary)
-
-Example CSV:
-```csv
-sequence,label
-ACGTACGTACGTACGT,0
-TGCATGCATGCATGCA,1
-```
-
-**Running Custom CSV Classification:**
-
-```shell
-# Single GPU
-python -m src.tasks.downstream.sequence_understanding \
-    --csv_dir="/path/to/csv/data" \
-    --model_name="GenerTeam/GENERanno-prokaryote-0.5b-base" \
-    --output_dir="./results/my_task" \
-    --batch_size=16 \
-    --max_length=8192 \
-    --learning_rate=1e-5 \
-    --d_output=2 \
-    --seed=42 \
-    --main_metrics="mcc"
-```
-
-**Test Results:**
-
-After training completes, comprehensive test metrics are saved to `test_results.json` in the output directory:
-- `eval_accuracy`: Overall accuracy
-- `eval_precision`, `eval_recall`, `eval_f1`: Standard classification metrics
-- `eval_mcc`: Matthews Correlation Coefficient (computed on full test set, not per-batch averaged)
-- `eval_sensitivity`, `eval_specificity`: For binary classification
-- `eval_auc`: Area under ROC curve
-- `eval_loss`: Test loss
-
-**SLURM Scripts for HPC (Biowulf):**
-
-SLURM scripts are provided in `slurm_scripts/` for running on HPC clusters:
-
-1. **Edit the wrapper script** (`wrapper_run_generanno_csv.sh`):
-   ```bash
-   export CSV_DIR="/path/to/your/csv/data"
-   export DATASET_NAME="my_dataset"
-   export MODEL_NAME="GenerTeam/GENERanno-prokaryote-0.5b-base"
-   export NUM_REPLICATES=10  # For 10 seeds (1-10)
-   ```
-
-2. **Submit to SLURM:**
-   ```bash
-   cd slurm_scripts
-   bash wrapper_run_generanno_csv.sh
-   ```
-
-3. **For interactive testing** (on a GPU node without sbatch):
-   ```bash
-   cd slurm_scripts
-   bash run_generanno_csv_interactive.sh wrapper_run_generanno_csv.sh
-   ```
-
-#### Embedding Analysis
-
-Extract embeddings from a model and analyze their quality using linear probes, silhouette scores, PCA visualization, and a 3-layer neural network classifier.
-
-```shell
-python -m src.tasks.downstream.embedding_analysis \
-    --csv_dir="/path/to/csv/data" \
-    --model_path="GenerTeam/GENERanno-prokaryote-0.5b-base" \
-    --output_dir="./results/embedding_analysis" \
-    --pooling="mean" \
-    --batch_size=16
-```
-
-**Outputs:**
-- `embeddings.npz`: Extracted embeddings for train/val/test sets
-- `pca_visualization.png`: PCA plot showing class separation
-- `embedding_analysis_results.json`: All metrics including:
-  - Linear probe accuracy, F1, MCC, AUC
-  - 3-layer NN accuracy, F1, MCC, AUC
-  - Silhouette score (embedding quality measure)
-  - PCA explained variance
-
-#### Inference
-
-Run inference on a CSV file to get predictions with probabilities for threshold analysis.
-
-```shell
-python -m src.tasks.downstream.inference \
-    --input_csv="/path/to/test.csv" \
-    --model_path="/path/to/finetuned/model" \
-    --output_csv="/path/to/predictions.csv" \
-    --threshold=0.5 \
-    --save_metrics
-```
-
-**Output CSV columns:**
-- `sequence`: Original sequence
-- `label`: Original label (if present)
-- `prob_0`, `prob_1`: Class probabilities
-- `pred_label`: Predicted label
-
-The `--threshold` parameter allows custom classification thresholds for sensitivity/specificity tradeoff analysis.
 
 ## 📚 Datasets
 
