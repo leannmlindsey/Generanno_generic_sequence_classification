@@ -118,6 +118,11 @@ def parse_arguments() -> argparse.Namespace:
         default=1e-3,
         help="Learning rate for 3-layer NN",
     )
+    parser.add_argument(
+        "--include_random_baseline",
+        action="store_true",
+        help="Include random baseline (randomly initialized model) for comparison",
+    )
     return parser.parse_args()
 
 
@@ -142,6 +147,42 @@ def load_csv_data(csv_dir: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
 
     print(f"Loaded data - Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
     return train_df, val_df, test_df
+
+
+def create_random_model(model_path: str, device: torch.device, seed: int = 42):
+    """
+    Create a randomly initialized model (same architecture, no pretrained weights).
+
+    Args:
+        model_path: Path to model (used to get config/architecture)
+        device: Device to load model on
+        seed: Random seed for reproducibility
+
+    Returns:
+        Randomly initialized model
+    """
+    from transformers import AutoConfig
+
+    print("\n" + "=" * 60)
+    print("Creating Randomly Initialized Baseline Model")
+    print("=" * 60)
+
+    # Set seed for reproducible random initialization
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    # Load config from the model path
+    print(f"Loading config from: {model_path}")
+    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+
+    # Create model with random weights (not from pretrained)
+    model = AutoModel.from_config(config, trust_remote_code=True)
+    model = model.to(device)
+    model.eval()
+
+    print("  Model initialized with random weights")
+
+    return model
 
 
 def extract_embeddings(
@@ -548,6 +589,75 @@ def train_three_layer_nn(
     return metrics, model, scaler
 
 
+def run_analysis_on_embeddings(
+    train_embeddings: np.ndarray,
+    train_labels: np.ndarray,
+    val_embeddings: np.ndarray,
+    val_labels: np.ndarray,
+    test_embeddings: np.ndarray,
+    test_labels: np.ndarray,
+    output_dir: str,
+    prefix: str,
+    nn_hidden_dim: int,
+    nn_epochs: int,
+    nn_lr: float,
+    seed: int,
+    device: torch.device,
+) -> Dict[str, float]:
+    """
+    Run all embedding analyses (linear probe, silhouette, PCA, 3-layer NN).
+
+    Args:
+        prefix: Prefix for output files and metric keys (e.g., "pretrained" or "random")
+
+    Returns:
+        Dictionary of all metrics
+    """
+    results = {}
+
+    # 1. Train linear probe
+    linear_metrics = train_linear_probe(
+        train_embeddings, train_labels,
+        test_embeddings, test_labels,
+        seed,
+    )
+    results.update(linear_metrics)
+
+    # 2. Calculate silhouette score
+    silhouette = calculate_silhouette(test_embeddings, test_labels)
+    results["silhouette_score"] = silhouette
+
+    # 3. Create PCA visualization
+    pca_path = os.path.join(output_dir, f"pca_visualization_{prefix}.png")
+    pca_metrics = create_pca_visualization(
+        test_embeddings, test_labels,
+        pca_path,
+        title=f"PCA of Test Embeddings ({prefix})\n(Silhouette: {silhouette:.3f})",
+    )
+    results.update(pca_metrics)
+
+    # 4. Train 3-layer NN
+    nn_metrics, nn_model, nn_scaler = train_three_layer_nn(
+        train_embeddings, train_labels,
+        val_embeddings, val_labels,
+        test_embeddings, test_labels,
+        nn_hidden_dim, nn_epochs, nn_lr,
+        seed, device,
+    )
+    results.update(nn_metrics)
+
+    # Save NN model
+    nn_model_path = os.path.join(output_dir, f"three_layer_nn_{prefix}.pt")
+    torch.save({
+        "model_state_dict": nn_model.state_dict(),
+        "input_dim": test_embeddings.shape[1],
+        "hidden_dim": nn_hidden_dim,
+    }, nn_model_path)
+    print(f"\nSaved 3-layer NN to: {nn_model_path}")
+
+    return results
+
+
 def main():
     """Main function to run embedding analysis."""
     args = parse_arguments()
@@ -570,17 +680,23 @@ def main():
     # Load data
     train_df, val_df, test_df = load_csv_data(args.csv_dir)
 
-    # Load model and tokenizer
-    print(f"\nLoading model from: {args.model_path}")
+    # Load tokenizer
+    print(f"\nLoading tokenizer from: {args.model_path}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    model = AutoModel.from_pretrained(args.model_path, trust_remote_code=True)
-    model = model.to(device)
-
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Extract embeddings
-    print("\nExtracting train embeddings...")
+    # ========== PRETRAINED MODEL ==========
+    print("\n" + "#" * 60)
+    print("# PRETRAINED MODEL ANALYSIS")
+    print("#" * 60)
+
+    print(f"\nLoading pretrained model from: {args.model_path}")
+    model = AutoModel.from_pretrained(args.model_path, trust_remote_code=True)
+    model = model.to(device)
+
+    # Extract embeddings from pretrained model
+    print("\nExtracting train embeddings (pretrained)...")
     train_embeddings, train_labels = extract_embeddings(
         model, tokenizer,
         train_df["sequence"].tolist(),
@@ -588,7 +704,7 @@ def main():
         args.batch_size, args.max_length, args.pooling, device,
     )
 
-    print("\nExtracting validation embeddings...")
+    print("\nExtracting validation embeddings (pretrained)...")
     val_embeddings, val_labels = extract_embeddings(
         model, tokenizer,
         val_df["sequence"].tolist(),
@@ -596,7 +712,7 @@ def main():
         args.batch_size, args.max_length, args.pooling, device,
     )
 
-    print("\nExtracting test embeddings...")
+    print("\nExtracting test embeddings (pretrained)...")
     test_embeddings, test_labels = extract_embeddings(
         model, tokenizer,
         test_df["sequence"].tolist(),
@@ -606,8 +722,8 @@ def main():
 
     print(f"\nEmbedding shape: {test_embeddings.shape}")
 
-    # Save embeddings
-    embeddings_path = os.path.join(args.output_dir, "embeddings.npz")
+    # Save pretrained embeddings
+    embeddings_path = os.path.join(args.output_dir, "embeddings_pretrained.npz")
     np.savez(
         embeddings_path,
         train_embeddings=train_embeddings,
@@ -617,9 +733,84 @@ def main():
         test_embeddings=test_embeddings,
         test_labels=test_labels,
     )
-    print(f"\nSaved embeddings to: {embeddings_path}")
+    print(f"\nSaved pretrained embeddings to: {embeddings_path}")
 
-    # Initialize results dictionary
+    # Run analysis on pretrained embeddings
+    pretrained_results = run_analysis_on_embeddings(
+        train_embeddings, train_labels,
+        val_embeddings, val_labels,
+        test_embeddings, test_labels,
+        args.output_dir, "pretrained",
+        args.nn_hidden_dim, args.nn_epochs, args.nn_lr,
+        args.seed, device,
+    )
+
+    # Free memory
+    del model
+    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+    # ========== RANDOM BASELINE (if requested) ==========
+    random_results = None
+    if args.include_random_baseline:
+        print("\n" + "#" * 60)
+        print("# RANDOM BASELINE MODEL ANALYSIS")
+        print("#" * 60)
+
+        random_model = create_random_model(args.model_path, device, seed=args.seed + 1000)
+
+        # Extract embeddings from random model
+        print("\nExtracting train embeddings (random)...")
+        train_embeddings_rand, _ = extract_embeddings(
+            random_model, tokenizer,
+            train_df["sequence"].tolist(),
+            train_df["label"].tolist(),
+            args.batch_size, args.max_length, args.pooling, device,
+        )
+
+        print("\nExtracting validation embeddings (random)...")
+        val_embeddings_rand, _ = extract_embeddings(
+            random_model, tokenizer,
+            val_df["sequence"].tolist(),
+            val_df["label"].tolist(),
+            args.batch_size, args.max_length, args.pooling, device,
+        )
+
+        print("\nExtracting test embeddings (random)...")
+        test_embeddings_rand, _ = extract_embeddings(
+            random_model, tokenizer,
+            test_df["sequence"].tolist(),
+            test_df["label"].tolist(),
+            args.batch_size, args.max_length, args.pooling, device,
+        )
+
+        # Save random embeddings
+        embeddings_path_rand = os.path.join(args.output_dir, "embeddings_random.npz")
+        np.savez(
+            embeddings_path_rand,
+            train_embeddings=train_embeddings_rand,
+            train_labels=train_labels,
+            val_embeddings=val_embeddings_rand,
+            val_labels=val_labels,
+            test_embeddings=test_embeddings_rand,
+            test_labels=test_labels,
+        )
+        print(f"\nSaved random embeddings to: {embeddings_path_rand}")
+
+        # Run analysis on random embeddings
+        random_results = run_analysis_on_embeddings(
+            train_embeddings_rand, train_labels,
+            val_embeddings_rand, val_labels,
+            test_embeddings_rand, test_labels,
+            args.output_dir, "random",
+            args.nn_hidden_dim, args.nn_epochs, args.nn_lr,
+            args.seed, device,
+        )
+
+        # Free memory
+        del random_model
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+    # ========== COMPILE FINAL RESULTS ==========
     results = {
         "model_path": args.model_path,
         "csv_dir": args.csv_dir,
@@ -628,47 +819,38 @@ def main():
         "train_samples": len(train_labels),
         "val_samples": len(val_labels),
         "test_samples": len(test_labels),
+        "include_random_baseline": args.include_random_baseline,
     }
 
-    # 1. Train linear probe
-    linear_metrics = train_linear_probe(
-        train_embeddings, train_labels,
-        test_embeddings, test_labels,
-        args.seed,
-    )
-    results.update(linear_metrics)
+    # Add pretrained results with prefix
+    for key, value in pretrained_results.items():
+        results[f"pretrained_{key}"] = value
 
-    # 2. Calculate silhouette score
-    silhouette = calculate_silhouette(test_embeddings, test_labels)
-    results["silhouette_score"] = silhouette
+    # Add random results and compute embedding power if available
+    if random_results is not None:
+        for key, value in random_results.items():
+            results[f"random_{key}"] = value
 
-    # 3. Create PCA visualization
-    pca_path = os.path.join(args.output_dir, "pca_visualization.png")
-    pca_metrics = create_pca_visualization(
-        test_embeddings, test_labels,
-        pca_path,
-        title=f"PCA of Test Embeddings\n(Silhouette: {silhouette:.3f})",
-    )
-    results.update(pca_metrics)
+        # Compute embedding power (pretrained - random)
+        print("\n" + "=" * 60)
+        print("Computing Embedding Power (Pretrained - Random)")
+        print("=" * 60)
 
-    # 4. Train 3-layer NN
-    nn_metrics, nn_model, nn_scaler = train_three_layer_nn(
-        train_embeddings, train_labels,
-        val_embeddings, val_labels,
-        test_embeddings, test_labels,
-        args.nn_hidden_dim, args.nn_epochs, args.nn_lr,
-        args.seed, device,
-    )
-    results.update(nn_metrics)
+        embedding_power = {}
+        metrics_to_compare = [
+            "linear_probe_accuracy", "linear_probe_f1", "linear_probe_mcc", "linear_probe_auc",
+            "nn_accuracy", "nn_f1", "nn_mcc", "nn_auc",
+            "silhouette_score",
+        ]
 
-    # Save NN model
-    nn_model_path = os.path.join(args.output_dir, "three_layer_nn.pt")
-    torch.save({
-        "model_state_dict": nn_model.state_dict(),
-        "input_dim": test_embeddings.shape[1],
-        "hidden_dim": args.nn_hidden_dim,
-    }, nn_model_path)
-    print(f"\nSaved 3-layer NN to: {nn_model_path}")
+        for metric in metrics_to_compare:
+            pretrained_val = pretrained_results.get(metric, 0)
+            random_val = random_results.get(metric, 0)
+            power = pretrained_val - random_val
+            embedding_power[f"embedding_power_{metric}"] = power
+            print(f"  {metric}: {pretrained_val:.4f} - {random_val:.4f} = {power:+.4f}")
+
+        results.update(embedding_power)
 
     # Save results
     results_path = os.path.join(args.output_dir, "embedding_analysis_results.json")
@@ -678,19 +860,49 @@ def main():
 
     # Print summary
     print("\n" + "=" * 60)
-    print("SUMMARY")
+    print("SUMMARY - PRETRAINED MODEL")
     print("=" * 60)
     print(f"\nLinear Probe Results:")
-    print(f"  Accuracy: {results['linear_probe_accuracy']:.4f}")
-    print(f"  MCC: {results['linear_probe_mcc']:.4f}")
-    print(f"  AUC: {results['linear_probe_auc']:.4f}")
+    print(f"  Accuracy: {pretrained_results['linear_probe_accuracy']:.4f}")
+    print(f"  MCC: {pretrained_results['linear_probe_mcc']:.4f}")
+    print(f"  AUC: {pretrained_results['linear_probe_auc']:.4f}")
     print(f"\n3-Layer NN Results:")
-    print(f"  Accuracy: {results['nn_accuracy']:.4f}")
-    print(f"  MCC: {results['nn_mcc']:.4f}")
-    print(f"  AUC: {results['nn_auc']:.4f}")
+    print(f"  Accuracy: {pretrained_results['nn_accuracy']:.4f}")
+    print(f"  MCC: {pretrained_results['nn_mcc']:.4f}")
+    print(f"  AUC: {pretrained_results['nn_auc']:.4f}")
     print(f"\nEmbedding Quality:")
-    print(f"  Silhouette Score: {results['silhouette_score']:.4f}")
-    print(f"  PCA Variance Explained: {results['pca_total_explained_variance']*100:.1f}%")
+    print(f"  Silhouette Score: {pretrained_results['silhouette_score']:.4f}")
+    print(f"  PCA Variance Explained: {pretrained_results['pca_total_explained_variance']*100:.1f}%")
+
+    if random_results is not None:
+        print("\n" + "=" * 60)
+        print("SUMMARY - RANDOM BASELINE")
+        print("=" * 60)
+        print(f"\nLinear Probe Results:")
+        print(f"  Accuracy: {random_results['linear_probe_accuracy']:.4f}")
+        print(f"  MCC: {random_results['linear_probe_mcc']:.4f}")
+        print(f"  AUC: {random_results['linear_probe_auc']:.4f}")
+        print(f"\n3-Layer NN Results:")
+        print(f"  Accuracy: {random_results['nn_accuracy']:.4f}")
+        print(f"  MCC: {random_results['nn_mcc']:.4f}")
+        print(f"  AUC: {random_results['nn_auc']:.4f}")
+        print(f"\nEmbedding Quality:")
+        print(f"  Silhouette Score: {random_results['silhouette_score']:.4f}")
+        print(f"  PCA Variance Explained: {random_results['pca_total_explained_variance']*100:.1f}%")
+
+        print("\n" + "=" * 60)
+        print("EMBEDDING POWER (Pretrained - Random)")
+        print("=" * 60)
+        print(f"\nLinear Probe:")
+        print(f"  Accuracy: {embedding_power['embedding_power_linear_probe_accuracy']:+.4f}")
+        print(f"  MCC: {embedding_power['embedding_power_linear_probe_mcc']:+.4f}")
+        print(f"  AUC: {embedding_power['embedding_power_linear_probe_auc']:+.4f}")
+        print(f"\n3-Layer NN:")
+        print(f"  Accuracy: {embedding_power['embedding_power_nn_accuracy']:+.4f}")
+        print(f"  MCC: {embedding_power['embedding_power_nn_mcc']:+.4f}")
+        print(f"  AUC: {embedding_power['embedding_power_nn_auc']:+.4f}")
+        print(f"\nSilhouette Score: {embedding_power['embedding_power_silhouette_score']:+.4f}")
+
     print("=" * 60)
 
 

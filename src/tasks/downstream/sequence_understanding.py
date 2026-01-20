@@ -205,6 +205,11 @@ def parse_arguments() -> argparse.Namespace:
         choices=["ddp", "deepspeed", "fsdp"],
         help="Type of distributed training to use",
     )
+    parser.add_argument(
+        "--random_init",
+        action="store_true",
+        help="Use randomly initialized model instead of pretrained weights (for baseline comparison)",
+    )
     return parser.parse_args()
 
 
@@ -489,7 +494,12 @@ def setup_tokenizer(
     return tokenizer
 
 
-def setup_model(model_name: str, problem_type: str, num_labels: int) -> PreTrainedModel:
+def setup_model(
+    model_name: str,
+    problem_type: str,
+    num_labels: int,
+    random_init: bool = False,
+) -> PreTrainedModel:
     """
     Load and configure model for sequence understanding.
 
@@ -497,22 +507,44 @@ def setup_model(model_name: str, problem_type: str, num_labels: int) -> PreTrain
         model_name: Name or path of the HuggingFace model
         problem_type: Type of problem
         num_labels: Number of labels for the task
+        random_init: If True, use randomly initialized weights instead of pretrained
 
     Returns:
-        PreTrainedModel: Configured pre-trained model for sequence classification
+        PreTrainedModel: Configured model for sequence classification
     """
-    dist_print(
-        f"🤗 Loading AutoModelForSequenceClassification from: {model_name} with {num_labels} labels"
-    )
+    from transformers import AutoConfig
+
     start_time = time.time()
 
-    # Load model with appropriate problem type and label configuration
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_name,
-        num_labels=num_labels,
-        problem_type=problem_type,
-        trust_remote_code=True,
-    )
+    if random_init:
+        dist_print(
+            f"🎲 Creating RANDOMLY INITIALIZED model from: {model_name} with {num_labels} labels"
+        )
+        dist_print("⚠️  WARNING: Using random initialization (no pretrained weights)")
+
+        # Load config only, then create model with random weights
+        config = AutoConfig.from_pretrained(
+            model_name,
+            num_labels=num_labels,
+            problem_type=problem_type,
+            trust_remote_code=True,
+        )
+        model = AutoModelForSequenceClassification.from_config(
+            config,
+            trust_remote_code=True,
+        )
+    else:
+        dist_print(
+            f"🤗 Loading AutoModelForSequenceClassification from: {model_name} with {num_labels} labels"
+        )
+
+        # Load model with pretrained weights
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            num_labels=num_labels,
+            problem_type=problem_type,
+            trust_remote_code=True,
+        )
 
     # Ensure pad_token_id is set
     if model.config.pad_token_id is None:
@@ -1108,7 +1140,7 @@ def main() -> None:
         )
 
     # Now initialize model with correct number of labels
-    model = setup_model(args.model_name, args.problem_type, num_labels)
+    model = setup_model(args.model_name, args.problem_type, num_labels, args.random_init)
 
     # Train model
     trainer = train_model(model, tokenizer, datasets, args)

@@ -51,7 +51,33 @@ python -m src.tasks.downstream.sequence_understanding \
     --main_metrics="mcc"
 ```
 
-### 3. SLURM Scripts (for HPC)
+### 3. Random Initialization Baseline
+
+To measure the contribution of pretraining, you can train with randomly initialized weights (same architecture, no pretrained weights). This provides a baseline to compare against the pretrained model.
+
+```bash
+python -m src.tasks.downstream.sequence_understanding \
+    --csv_dir="/path/to/my_dataset" \
+    --model_name="GenerTeam/GENERanno-prokaryote-0.5b-base" \
+    --output_dir="./results/my_task_random" \
+    --random_init \
+    --seed=42
+```
+
+When `--random_init` is used:
+- The model architecture is loaded from the model config
+- Pretrained weights are **not** loaded
+- All weights are randomly initialized
+
+**Comparing Results:**
+
+Run two experiments with the same seed and hyperparameters:
+1. Pretrained: without `--random_init` (default)
+2. Random: with `--random_init`
+
+The difference in metrics shows the "embedding power" gained from pretraining.
+
+### 4. SLURM Scripts (for HPC)
 
 SLURM scripts are provided in `slurm_scripts/` for running on HPC clusters (configured for NIH Biowulf):
 
