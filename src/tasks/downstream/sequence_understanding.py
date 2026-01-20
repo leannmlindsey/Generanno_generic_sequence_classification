@@ -1,9 +1,11 @@
 import argparse
+import json
 import os
 import time
 from typing import Dict, Tuple, Union, Optional, Callable
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.distributed as dist
 import transformers
@@ -15,7 +17,15 @@ from datasets import (
     IterableDatasetDict,
     IterableDataset,
 )
-from sklearn.metrics import f1_score, matthews_corrcoef
+from sklearn.metrics import (
+    f1_score,
+    matthews_corrcoef,
+    accuracy_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+    confusion_matrix,
+)
 from sklearn.model_selection import KFold
 from transformers import (
     AutoTokenizer,
@@ -84,14 +94,19 @@ def parse_arguments() -> argparse.Namespace:
         "--dataset_name",
         type=str,
         default=None,
-        required=True,
-        help="Name of the dataset on HuggingFace Hub",
+        help="Name of the dataset on HuggingFace Hub (mutually exclusive with --csv_dir)",
     )
     parser.add_argument(
         "--subset_name",
         type=str,
         default=None,
         help="Name of the subset of the dataset (if applicable)",
+    )
+    parser.add_argument(
+        "--csv_dir",
+        type=str,
+        default=None,
+        help="Path to directory containing train.csv, dev.csv, test.csv with 'sequence' and 'label' columns",
     )
     parser.add_argument(
         "--model_name",
@@ -170,6 +185,12 @@ def parse_arguments() -> argparse.Namespace:
             "regression",
         ],
         help="Problem type for the task",
+    )
+    parser.add_argument(
+        "--d_output",
+        type=int,
+        default=2,
+        help="Number of output classes (default: 2 for binary classification)",
     )
     parser.add_argument(
         "--hf_config_path",
@@ -291,6 +312,118 @@ def setup_dataset(
             raise ValueError(
                 "No sequence column found in dataset. Expected 'sequence', 'seq', 'dna_sequence', 'dna_seq', or 'text'."
             )
+
+        # Tokenize sequences
+        tokenized = tokenizer(
+            sequences,
+            truncation=True,
+            max_length=max_length,
+            add_special_tokens=True,
+            padding=False,
+        )
+
+        # Create attention masks manually
+        tokenized["attention_mask"] = [
+            [1] * len(input_id) for input_id in tokenized["input_ids"]
+        ]
+        tokenized["label"] = examples["label"]
+        return tokenized
+
+    # Apply tokenization to dataset
+    dataset = dataset.map(
+        _process_function,
+        batched=True,
+        remove_columns=[
+            col
+            for col in dataset["train"].column_names
+            if col not in ["input_ids", "attention_mask", "label"]
+        ],
+    )
+
+    return dataset, num_labels
+
+
+def setup_csv_dataset(
+    csv_dir: str,
+    tokenizer: Optional[PreTrainedTokenizer] = None,
+    max_length: int = 8192,
+    d_output: int = 2,
+) -> Tuple[DatasetDict, int]:
+    """
+    Load and prepare dataset from CSV files for sequence understanding.
+
+    Expected CSV format:
+        - Files: train.csv, dev.csv (or val.csv), test.csv
+        - Columns: 'sequence' and 'label'
+
+    Args:
+        csv_dir: Path to directory containing CSV files
+        tokenizer: Tokenizer for the model
+        max_length: Maximum sequence length for tokenization
+        d_output: Number of output classes (default: 2 for binary)
+
+    Returns:
+        Tuple of (preprocessed DatasetDict, number of labels)
+    """
+    dist_print(f"Loading CSV dataset from {csv_dir}...")
+    start_time = time.time()
+
+    # Determine file paths
+    train_path = os.path.join(csv_dir, "train.csv")
+    test_path = os.path.join(csv_dir, "test.csv")
+
+    # Check for dev.csv or val.csv
+    dev_path = os.path.join(csv_dir, "dev.csv")
+    val_path = os.path.join(csv_dir, "val.csv")
+    if os.path.exists(dev_path):
+        validation_path = dev_path
+    elif os.path.exists(val_path):
+        validation_path = val_path
+    else:
+        raise FileNotFoundError(f"No validation file found. Expected dev.csv or val.csv in {csv_dir}")
+
+    # Validate files exist
+    if not os.path.exists(train_path):
+        raise FileNotFoundError(f"train.csv not found in {csv_dir}")
+    if not os.path.exists(test_path):
+        raise FileNotFoundError(f"test.csv not found in {csv_dir}")
+
+    # Load CSV files
+    train_df = pd.read_csv(train_path)
+    val_df = pd.read_csv(validation_path)
+    test_df = pd.read_csv(test_path)
+
+    dist_print(f"  Train samples: {len(train_df)}")
+    dist_print(f"  Validation samples: {len(val_df)}")
+    dist_print(f"  Test samples: {len(test_df)}")
+
+    # Validate columns
+    required_columns = ["sequence", "label"]
+    for df, name in [(train_df, "train"), (val_df, "validation"), (test_df, "test")]:
+        for col in required_columns:
+            if col not in df.columns:
+                raise ValueError(f"Column '{col}' not found in {name}.csv. Expected columns: {required_columns}")
+
+    # Create HuggingFace datasets from DataFrames
+    train_dataset = Dataset.from_pandas(train_df[required_columns])
+    val_dataset = Dataset.from_pandas(val_df[required_columns])
+    test_dataset = Dataset.from_pandas(test_df[required_columns])
+
+    # Create DatasetDict
+    dataset = DatasetDict({
+        "train": train_dataset,
+        "validation": val_dataset,
+        "test": test_dataset,
+    })
+
+    dist_print(f"Dataset loaded in {time.time() - start_time:.2f} seconds")
+
+    # Determine number of labels
+    num_labels = d_output
+
+    # Process dataset with tokenizer
+    def _process_function(examples):
+        sequences = examples["sequence"]
 
         # Tokenize sequences
         tokenized = tokenizer(
@@ -772,15 +905,121 @@ def evaluate_model(trainer: Trainer, test_dataset: Dataset) -> Dict[str, float]:
     Returns:
         Dict[str, float]: Dictionary of evaluation metrics
     """
-    dist_print("📊 Evaluating model on test dataset...")
+    dist_print("Evaluating model on test dataset...")
     start_time = time.time()
 
     # Run evaluation
     test_results = trainer.evaluate(test_dataset, metric_key_prefix="test")
 
-    dist_print(f"⏱️ Evaluation completed in {time.time() - start_time:.2f} seconds")
+    dist_print(f"Evaluation completed in {time.time() - start_time:.2f} seconds")
 
     return test_results
+
+
+def evaluate_model_comprehensive(
+    trainer: Trainer,
+    test_dataset: Dataset,
+    output_dir: str,
+    args: argparse.Namespace,
+    num_labels: int = 2,
+) -> Dict[str, float]:
+    """
+    Comprehensive evaluation using scikit-learn on the full test dataset.
+    Computes metrics on all predictions at once (not per-batch averaging).
+
+    Args:
+        trainer: Trained model trainer
+        test_dataset: Test dataset
+        output_dir: Directory to save results
+        args: Command line arguments
+        num_labels: Number of output classes
+
+    Returns:
+        Dict[str, float]: Dictionary of comprehensive evaluation metrics
+    """
+    dist_print("Running comprehensive evaluation on full test dataset...")
+    start_time = time.time()
+
+    # Get predictions on full test set
+    predictions_output = trainer.predict(test_dataset)
+    logits = predictions_output.predictions
+    labels = predictions_output.label_ids
+
+    # Convert to numpy arrays
+    if isinstance(logits, torch.Tensor):
+        logits = logits.cpu().numpy()
+    if isinstance(labels, torch.Tensor):
+        labels = labels.cpu().numpy()
+
+    # Get predictions and probabilities
+    preds = np.argmax(logits, axis=-1)
+
+    # Compute softmax probabilities for AUC
+    exp_logits = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
+    probs = exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
+
+    # Initialize results dictionary
+    results = {}
+
+    # Basic metrics
+    results["eval_accuracy"] = float(accuracy_score(labels, preds))
+    results["eval_mcc"] = float(matthews_corrcoef(labels, preds))
+
+    # For binary classification, compute additional metrics
+    if num_labels == 2:
+        results["eval_precision"] = float(precision_score(labels, preds, zero_division=0))
+        results["eval_recall"] = float(recall_score(labels, preds, zero_division=0))
+        results["eval_f1"] = float(f1_score(labels, preds, zero_division=0))
+
+        # Sensitivity and Specificity from confusion matrix
+        tn, fp, fn, tp = confusion_matrix(labels, preds, labels=[0, 1]).ravel()
+        results["eval_sensitivity"] = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+        results["eval_specificity"] = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
+
+        # AUC - use probability of positive class
+        try:
+            results["eval_auc"] = float(roc_auc_score(labels, probs[:, 1]))
+        except ValueError:
+            # If only one class present in labels
+            results["eval_auc"] = 0.0
+    else:
+        # Multiclass metrics
+        results["eval_precision"] = float(precision_score(labels, preds, average="weighted", zero_division=0))
+        results["eval_recall"] = float(recall_score(labels, preds, average="weighted", zero_division=0))
+        results["eval_f1"] = float(f1_score(labels, preds, average="weighted", zero_division=0))
+        results["eval_sensitivity"] = results["eval_recall"]  # Same as recall for multiclass
+        results["eval_specificity"] = 0.0  # Not well-defined for multiclass
+        try:
+            results["eval_auc"] = float(roc_auc_score(labels, probs, multi_class="ovr", average="weighted"))
+        except ValueError:
+            results["eval_auc"] = 0.0
+
+    # Get loss from trainer.evaluate (this is the only metric we get from there)
+    eval_results = trainer.evaluate(test_dataset, metric_key_prefix="eval")
+    results["eval_loss"] = float(eval_results.get("eval_loss", 0.0))
+
+    # Add metadata
+    results["model_name"] = args.model_name
+    results["seed"] = args.seed
+    results["max_length"] = args.max_length
+    results["batch_size"] = args.batch_size
+    results["learning_rate"] = args.learning_rate
+
+    # Add data path if using CSV
+    if hasattr(args, "csv_dir") and args.csv_dir:
+        results["data_dir"] = args.csv_dir
+    elif hasattr(args, "dataset_name") and args.dataset_name:
+        results["dataset_name"] = args.dataset_name
+
+    # Save to JSON
+    results_path = os.path.join(output_dir, "test_results.json")
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=2)
+
+    dist_print(f"Comprehensive evaluation completed in {time.time() - start_time:.2f} seconds")
+    dist_print(f"Results saved to: {results_path}")
+
+    return results
 
 
 def save_model(
@@ -828,6 +1067,12 @@ def main() -> None:
     # Parse command line arguments
     args = parse_arguments()
 
+    # Validate dataset arguments
+    if args.csv_dir and args.dataset_name:
+        raise ValueError("Cannot specify both --csv_dir and --dataset_name. Use one or the other.")
+    if not args.csv_dir and not args.dataset_name:
+        raise ValueError("Must specify either --csv_dir or --dataset_name.")
+
     # Set seed for reproducibility
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -839,16 +1084,28 @@ def main() -> None:
     tokenizer = setup_tokenizer(args.model_name, args.padding_and_truncation_side)
 
     # Load and prepare data
-    datasets, num_labels = setup_dataset(
-        args.dataset_name,
-        args.subset_name,
-        tokenizer,
-        args.max_length,
-        args.problem_type,
-        args.seed,
-        args.num_folds,
-        args.fold_id,
-    )
+    if args.csv_dir:
+        # Load from CSV files
+        dist_print(f"Using CSV dataset from: {args.csv_dir}")
+        datasets, num_labels = setup_csv_dataset(
+            args.csv_dir,
+            tokenizer,
+            args.max_length,
+            args.d_output,
+        )
+    else:
+        # Load from HuggingFace Hub
+        dist_print(f"Using HuggingFace dataset: {args.dataset_name}")
+        datasets, num_labels = setup_dataset(
+            args.dataset_name,
+            args.subset_name,
+            tokenizer,
+            args.max_length,
+            args.problem_type,
+            args.seed,
+            args.num_folds,
+            args.fold_id,
+        )
 
     # Now initialize model with correct number of labels
     model = setup_model(args.model_name, args.problem_type, num_labels)
@@ -856,16 +1113,22 @@ def main() -> None:
     # Train model
     trainer = train_model(model, tokenizer, datasets, args)
 
-    # Evaluate on test set
-    test_metrics = evaluate_model(trainer, datasets["test"])
+    # Run comprehensive evaluation on full test set
+    test_metrics = evaluate_model_comprehensive(
+        trainer,
+        datasets["test"],
+        args.output_dir,
+        args,
+        num_labels,
+    )
 
     # Print results
     dist_print("\n" + "=" * 80)
-    dist_print(f"🏆 EVALUATION RESULTS FOR {args.model_name} 🏆")
+    dist_print(f"EVALUATION RESULTS FOR {args.model_name}")
     dist_print("=" * 80)
     for metric, value in test_metrics.items():
-        if metric.startswith("test_"):
-            dist_print(f"📊 {metric[5:].upper()}: {value:.4f}")
+        if metric.startswith("eval_"):
+            dist_print(f"  {metric}: {value:.4f}")
     dist_print("=" * 80)
 
     # Save fine-tuned model
@@ -874,8 +1137,8 @@ def main() -> None:
     # Print total execution time
     total_time = time.time() - total_start_time
     minutes, seconds = divmod(total_time, 60)
-    dist_print(f"\n⏱️ Total execution time: {int(minutes)}m {seconds:.2f}s")
-    dist_print("✨ Fine-tuning completed successfully! ✨\n")
+    dist_print(f"\nTotal execution time: {int(minutes)}m {seconds:.2f}s")
+    dist_print("Fine-tuning completed successfully!\n")
 
 
 if __name__ == "__main__":

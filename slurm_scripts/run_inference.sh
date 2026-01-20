@@ -1,0 +1,96 @@
+#!/bin/bash
+#SBATCH --job-name=generanno_inf
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:a100:1
+#SBATCH --mem=32g
+#SBATCH --cpus-per-task=4
+#SBATCH --time=2:00:00
+#SBATCH --output=generanno_inf_%j.out
+#SBATCH --error=generanno_inf_%j.err
+
+# Biowulf batch script for GENERanno inference
+# Usage: sbatch run_inference.sh
+#
+# Required environment variables:
+#   INPUT_CSV: Path to CSV file with 'sequence' column
+#   MODEL_PATH: Path to fine-tuned model directory
+
+echo "============================================================"
+echo "GENERanno Inference"
+echo "============================================================"
+echo "Job started at: $(date)"
+echo "Running on node: $(hostname)"
+echo "Job ID: $SLURM_JOB_ID"
+
+# Load modules
+module load conda
+module load cuda/12.8
+
+# Activate conda environment
+source activate generanno_env
+
+# Ignore user site-packages
+export PYTHONNOUSERSITE=1
+
+# Check GPU
+echo ""
+echo "GPU Information:"
+nvidia-smi
+echo ""
+
+# Set defaults
+BATCH_SIZE=${BATCH_SIZE:-16}
+MAX_LENGTH=${MAX_LENGTH:-8192}
+THRESHOLD=${THRESHOLD:-0.5}
+
+# Validate required parameters
+if [ -z "${INPUT_CSV}" ]; then
+    echo "ERROR: INPUT_CSV is not set"
+    exit 1
+fi
+
+if [ -z "${MODEL_PATH}" ]; then
+    echo "ERROR: MODEL_PATH is not set"
+    exit 1
+fi
+
+# Navigate to repo root
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "${SCRIPT_DIR}/.." || exit
+echo "Working directory: $(pwd)"
+
+export PYTHONPATH="${PWD}:${PYTHONPATH}"
+
+# Set output path
+if [ -z "${OUTPUT_CSV}" ]; then
+    OUTPUT_CSV="${INPUT_CSV%.csv}_predictions.csv"
+fi
+
+echo ""
+echo "============================================================"
+echo "Configuration:"
+echo "============================================================"
+echo "  Model: ${MODEL_PATH}"
+echo "  Input CSV: ${INPUT_CSV}"
+echo "  Output CSV: ${OUTPUT_CSV}"
+echo "  Batch size: ${BATCH_SIZE}"
+echo "  Max length: ${MAX_LENGTH}"
+echo "  Threshold: ${THRESHOLD}"
+echo "============================================================"
+echo ""
+
+# Run inference
+python -m src.tasks.downstream.inference \
+    --input_csv="${INPUT_CSV}" \
+    --model_path="${MODEL_PATH}" \
+    --output_csv="${OUTPUT_CSV}" \
+    --batch_size=${BATCH_SIZE} \
+    --max_length=${MAX_LENGTH} \
+    --threshold=${THRESHOLD} \
+    --save_metrics
+
+echo ""
+echo "============================================================"
+echo "Job completed at: $(date)"
+echo "Predictions saved to: ${OUTPUT_CSV}"
+echo "============================================================"

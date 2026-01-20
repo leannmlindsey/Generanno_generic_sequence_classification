@@ -148,6 +148,114 @@ torchrun --nnodes=${NUM_NODES} \
     --distributed_type deepspeed # or fsdp
 ```
 
+#### Custom CSV Binary Classification
+
+You can fine-tune GENERanno on your own binary classification task using CSV files.
+
+**CSV Format Requirements:**
+- Three files in a directory: `train.csv`, `dev.csv` (or `val.csv`), `test.csv`
+- Required columns: `sequence` (DNA sequence) and `label` (0 or 1 for binary)
+
+Example CSV:
+```csv
+sequence,label
+ACGTACGTACGTACGT,0
+TGCATGCATGCATGCA,1
+```
+
+**Running Custom CSV Classification:**
+
+```shell
+# Single GPU
+python -m src.tasks.downstream.sequence_understanding \
+    --csv_dir="/path/to/csv/data" \
+    --model_name="GenerTeam/GENERanno-prokaryote-0.5b-base" \
+    --output_dir="./results/my_task" \
+    --batch_size=16 \
+    --max_length=8192 \
+    --learning_rate=1e-5 \
+    --d_output=2 \
+    --seed=42 \
+    --main_metrics="mcc"
+```
+
+**Test Results:**
+
+After training completes, comprehensive test metrics are saved to `test_results.json` in the output directory:
+- `eval_accuracy`: Overall accuracy
+- `eval_precision`, `eval_recall`, `eval_f1`: Standard classification metrics
+- `eval_mcc`: Matthews Correlation Coefficient (computed on full test set, not per-batch averaged)
+- `eval_sensitivity`, `eval_specificity`: For binary classification
+- `eval_auc`: Area under ROC curve
+- `eval_loss`: Test loss
+
+**SLURM Scripts for HPC (Biowulf):**
+
+SLURM scripts are provided in `slurm_scripts/` for running on HPC clusters:
+
+1. **Edit the wrapper script** (`wrapper_run_generanno_csv.sh`):
+   ```bash
+   export CSV_DIR="/path/to/your/csv/data"
+   export DATASET_NAME="my_dataset"
+   export MODEL_NAME="GenerTeam/GENERanno-prokaryote-0.5b-base"
+   export NUM_REPLICATES=10  # For 10 seeds (1-10)
+   ```
+
+2. **Submit to SLURM:**
+   ```bash
+   cd slurm_scripts
+   bash wrapper_run_generanno_csv.sh
+   ```
+
+3. **For interactive testing** (on a GPU node without sbatch):
+   ```bash
+   cd slurm_scripts
+   bash run_generanno_csv_interactive.sh wrapper_run_generanno_csv.sh
+   ```
+
+#### Embedding Analysis
+
+Extract embeddings from a model and analyze their quality using linear probes, silhouette scores, PCA visualization, and a 3-layer neural network classifier.
+
+```shell
+python -m src.tasks.downstream.embedding_analysis \
+    --csv_dir="/path/to/csv/data" \
+    --model_path="GenerTeam/GENERanno-prokaryote-0.5b-base" \
+    --output_dir="./results/embedding_analysis" \
+    --pooling="mean" \
+    --batch_size=16
+```
+
+**Outputs:**
+- `embeddings.npz`: Extracted embeddings for train/val/test sets
+- `pca_visualization.png`: PCA plot showing class separation
+- `embedding_analysis_results.json`: All metrics including:
+  - Linear probe accuracy, F1, MCC, AUC
+  - 3-layer NN accuracy, F1, MCC, AUC
+  - Silhouette score (embedding quality measure)
+  - PCA explained variance
+
+#### Inference
+
+Run inference on a CSV file to get predictions with probabilities for threshold analysis.
+
+```shell
+python -m src.tasks.downstream.inference \
+    --input_csv="/path/to/test.csv" \
+    --model_path="/path/to/finetuned/model" \
+    --output_csv="/path/to/predictions.csv" \
+    --threshold=0.5 \
+    --save_metrics
+```
+
+**Output CSV columns:**
+- `sequence`: Original sequence
+- `label`: Original label (if present)
+- `prob_0`, `prob_1`: Class probabilities
+- `pred_label`: Predicted label
+
+The `--threshold` parameter allows custom classification thresholds for sensitivity/specificity tradeoff analysis.
+
 ## 📚 Datasets
 
 * [Eukaryotic Gener Tasks](https://huggingface.co/datasets/GenerTeam/gener-tasks)
