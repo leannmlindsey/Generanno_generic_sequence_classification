@@ -325,6 +325,7 @@ def setup_dataset(
             max_length=max_length,
             add_special_tokens=True,
             padding=False,
+            return_token_type_ids=False,
         )
 
         # Create attention masks manually
@@ -437,6 +438,7 @@ def setup_csv_dataset(
             max_length=max_length,
             add_special_tokens=True,
             padding=False,
+            return_token_type_ids=False,
         )
 
         # Create attention masks manually
