@@ -140,6 +140,7 @@ def run_inference(
             truncation=True,
             max_length=max_length,
             return_tensors="pt",
+            return_token_type_ids=False,
         )
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
