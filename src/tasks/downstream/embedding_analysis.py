@@ -718,6 +718,8 @@ def main():
 
     # Check if embeddings already exist
     embeddings_path = os.path.join(args.output_dir, "embeddings_pretrained.npz")
+    print(f"\nChecking for cached embeddings at: {embeddings_path}")
+    print(f"File exists: {os.path.exists(embeddings_path)}")
     if os.path.exists(embeddings_path):
         print(f"\nFound existing embeddings at: {embeddings_path}")
         print("Loading embeddings from file (delete file to re-extract)...")

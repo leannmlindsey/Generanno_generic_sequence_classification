@@ -24,7 +24,12 @@ echo "Job ID: $SLURM_JOB_ID"
 
 # Load modules
 module load conda
-module load cuda/12.8
+module load CUDA/12.8
+
+# Set CUDA_HOME if not set
+if [ -z "${CUDA_HOME}" ]; then
+    export CUDA_HOME=$(dirname $(dirname $(which nvcc 2>/dev/null))) 2>/dev/null || true
+fi
 
 # Activate conda environment
 source activate generanno_env

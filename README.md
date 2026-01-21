@@ -81,9 +81,21 @@ The difference in metrics shows the "embedding power" gained from pretraining.
 
 SLURM scripts are provided in `slurm_scripts/` for running on HPC clusters (configured for NIH Biowulf):
 
+**Fine-tuning:**
 1. Edit `wrapper_run_generanno_csv.sh` with your paths
 2. Submit: `bash wrapper_run_generanno_csv.sh`
 3. For interactive testing: `bash run_generanno_csv_interactive.sh`
+
+**Embedding Analysis:**
+1. Edit `wrapper_run_embedding_analysis.sh` with your paths
+2. Submit: `bash wrapper_run_embedding_analysis.sh`
+3. For interactive testing: `bash run_embedding_analysis_interactive.sh`
+
+**Batch Inference:**
+1. Create a text file with input CSV paths (one per line)
+2. Edit `wrapper_run_batch_inference.sh` with your paths
+3. Submit: `bash wrapper_run_batch_inference.sh`
+4. For interactive testing: `bash run_batch_inference_interactive.sh`
 
 ### 5. Embedding Analysis
 
@@ -94,13 +106,18 @@ python -m src.tasks.downstream.embedding_analysis \
     --csv_dir="/path/to/csv/data" \
     --model_path="GenerTeam/GENERanno-prokaryote-0.5b-base" \
     --output_dir="./results/embedding_analysis" \
-    --pooling="mean"
+    --pooling="mean" \
+    --include_random_baseline  # Optional: compare with random init
 ```
 
 **Outputs:**
-- `embeddings.npz`: Extracted embeddings for train/val/test sets
-- `pca_visualization.png`: PCA plot showing class separation
-- `embedding_analysis_results.json`: Linear probe metrics, 3-layer NN metrics, silhouette score
+- `embeddings_pretrained.npz`: Extracted embeddings for train/val/test sets
+- `pca_visualization_pretrained.png`: PCA plot showing class separation
+- `test_predictions_pretrained.csv`: Test predictions with probabilities
+- `three_layer_nn_pretrained.pt`: Trained 3-layer NN model
+- `embedding_analysis_results.json`: All metrics including embedding power
+
+**Caching:** Embeddings are cached in `.npz` files. Delete them to re-extract with different settings.
 
 ### 6. Inference
 
@@ -116,6 +133,17 @@ python -m src.tasks.downstream.inference \
 ```
 
 **Output CSV columns:** `sequence`, `label`, `prob_0`, `prob_1`, `pred_label`
+
+**Batch Inference:** For processing multiple files, create a text file listing input CSVs (one per line) and use the batch inference scripts:
+
+```bash
+# Create input list
+echo "/path/to/test1.csv" > input_files.txt
+echo "/path/to/test2.csv" >> input_files.txt
+
+# Edit wrapper_run_batch_inference.sh with paths, then run:
+bash slurm_scripts/wrapper_run_batch_inference.sh
+```
 
 ### 7. Test Results
 
