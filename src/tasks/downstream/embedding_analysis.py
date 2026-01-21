@@ -331,7 +331,12 @@ def train_linear_probe(
     print(f"  MCC: {metrics['linear_probe_mcc']:.4f}")
     print(f"  AUC: {metrics['linear_probe_auc']:.4f}")
 
-    return metrics
+    # Return metrics and predictions
+    predictions = {
+        "test_preds": test_preds,
+        "test_probs": test_probs,
+    }
+    return metrics, predictions
 
 
 def calculate_silhouette(
@@ -586,7 +591,12 @@ def train_three_layer_nn(
     print(f"  MCC: {metrics['nn_mcc']:.4f}")
     print(f"  AUC: {metrics['nn_auc']:.4f}")
 
-    return metrics, model, scaler
+    # Return metrics, model, scaler, and predictions
+    predictions = {
+        "test_preds": test_preds,
+        "test_probs": test_probs,
+    }
+    return metrics, model, scaler, predictions
 
 
 def run_analysis_on_embeddings(
@@ -596,6 +606,7 @@ def run_analysis_on_embeddings(
     val_labels: np.ndarray,
     test_embeddings: np.ndarray,
     test_labels: np.ndarray,
+    test_sequences: List[str],
     output_dir: str,
     prefix: str,
     nn_hidden_dim: int,
@@ -608,6 +619,7 @@ def run_analysis_on_embeddings(
     Run all embedding analyses (linear probe, silhouette, PCA, 3-layer NN).
 
     Args:
+        test_sequences: List of test sequences (for saving predictions CSV)
         prefix: Prefix for output files and metric keys (e.g., "pretrained" or "random")
 
     Returns:
@@ -616,7 +628,7 @@ def run_analysis_on_embeddings(
     results = {}
 
     # 1. Train linear probe
-    linear_metrics = train_linear_probe(
+    linear_metrics, linear_preds = train_linear_probe(
         train_embeddings, train_labels,
         test_embeddings, test_labels,
         seed,
@@ -637,7 +649,7 @@ def run_analysis_on_embeddings(
     results.update(pca_metrics)
 
     # 4. Train 3-layer NN
-    nn_metrics, nn_model, nn_scaler = train_three_layer_nn(
+    nn_metrics, nn_model, nn_scaler, nn_preds = train_three_layer_nn(
         train_embeddings, train_labels,
         val_embeddings, val_labels,
         test_embeddings, test_labels,
@@ -645,6 +657,19 @@ def run_analysis_on_embeddings(
         seed, device,
     )
     results.update(nn_metrics)
+
+    # 5. Save test predictions to CSV
+    predictions_df = pd.DataFrame({
+        "sequence": test_sequences,
+        "label": test_labels,
+        "linear_probe_pred": linear_preds["test_preds"],
+        "linear_probe_prob": linear_preds["test_probs"],
+        "nn_pred": nn_preds["test_preds"],
+        "nn_prob": nn_preds["test_probs"],
+    })
+    predictions_path = os.path.join(output_dir, f"test_predictions_{prefix}.csv")
+    predictions_df.to_csv(predictions_path, index=False)
+    print(f"\nSaved test predictions to: {predictions_path}")
 
     # Save NN model
     nn_model_path = os.path.join(output_dir, f"three_layer_nn_{prefix}.pt")
@@ -740,6 +765,7 @@ def main():
         train_embeddings, train_labels,
         val_embeddings, val_labels,
         test_embeddings, test_labels,
+        test_df["sequence"].tolist(),
         args.output_dir, "pretrained",
         args.nn_hidden_dim, args.nn_epochs, args.nn_lr,
         args.seed, device,
@@ -801,6 +827,7 @@ def main():
             train_embeddings_rand, train_labels,
             val_embeddings_rand, val_labels,
             test_embeddings_rand, test_labels,
+            test_df["sequence"].tolist(),
             args.output_dir, "random",
             args.nn_hidden_dim, args.nn_epochs, args.nn_lr,
             args.seed, device,

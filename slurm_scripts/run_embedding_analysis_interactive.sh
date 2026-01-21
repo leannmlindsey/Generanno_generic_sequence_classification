@@ -1,30 +1,40 @@
 #!/bin/bash
-#SBATCH --job-name=generanno_emb
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:a100:1
-#SBATCH --mem=64g
-#SBATCH --cpus-per-task=8
-#SBATCH --time=4:00:00
-#SBATCH --output=generanno_emb_%j.out
-#SBATCH --error=generanno_emb_%j.err
 
-# Biowulf batch script for GENERanno embedding analysis
-# Usage: sbatch run_embedding_analysis.sh
+# Interactive script for running GENERanno embedding analysis WITHOUT sbatch
+# Usage: bash run_embedding_analysis_interactive.sh [wrapper_script.sh]
 #
-# Required environment variables:
-#   CSV_DIR: Path to directory containing train.csv, dev.csv, test.csv
-#   MODEL_PATH: Path to fine-tuned model or HuggingFace model name
+# This script reads configuration from wrapper_run_embedding_analysis.sh (or specify another)
+# and runs the job directly on the current node.
+
+# Source the wrapper to get all the environment variables
+# Change this path if your wrapper has a different name
+WRAPPER_SCRIPT="${1:-wrapper_run_embedding_analysis.sh}"
+
+if [ ! -f "${WRAPPER_SCRIPT}" ]; then
+    echo "ERROR: Wrapper script not found: ${WRAPPER_SCRIPT}"
+    echo "Usage: bash run_embedding_analysis_interactive.sh [wrapper_script.sh]"
+    exit 1
+fi
 
 echo "============================================================"
-echo "GENERanno Embedding Analysis"
+echo "Loading configuration from: ${WRAPPER_SCRIPT}"
+echo "============================================================"
+
+# Source the wrapper but just get the exports
+source <(grep "^export" "${WRAPPER_SCRIPT}")
+
+# Now run the main script logic
+
+echo ""
+echo "GENERanno Embedding Analysis (Interactive Mode)"
 echo "============================================================"
 echo "Job started at: $(date)"
 echo "Running on node: $(hostname)"
-echo "Job ID: $SLURM_JOB_ID"
+echo ""
 
-# Load modules
-module load conda
-module load CUDA/12.8
+# Load modules (comment out if not on Biowulf/HPC)
+module load conda 2>/dev/null || true
+module load CUDA/12.8 2>/dev/null || true
 
 # Set CUDA_HOME if not set
 if [ -z "${CUDA_HOME}" ]; then
@@ -34,16 +44,20 @@ fi
 # Activate conda environment
 source activate generanno_env
 
-# Ignore user site-packages
+# Ignore user site-packages to avoid conflicts with ~/.local packages
 export PYTHONNOUSERSITE=1
 
-# Check GPU
+# Check GPU availability
 echo ""
 echo "GPU Information:"
 nvidia-smi
 echo ""
+echo "Python environment:"
+which python
+python --version
+echo ""
 
-# Set defaults
+# Set defaults for optional parameters
 MODEL_PATH=${MODEL_PATH:-GenerTeam/GENERanno-prokaryote-0.5b-base}
 BATCH_SIZE=${BATCH_SIZE:-16}
 MAX_LENGTH=${MAX_LENGTH:-8192}
@@ -65,6 +79,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "${SCRIPT_DIR}/.." || exit
 echo "Working directory: $(pwd)"
 
+# Add to PYTHONPATH
 export PYTHONPATH="${PWD}:${PYTHONPATH}"
 
 # Set output directory
