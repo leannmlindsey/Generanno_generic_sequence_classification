@@ -716,49 +716,66 @@ def main():
     print("# PRETRAINED MODEL ANALYSIS")
     print("#" * 60)
 
-    print(f"\nLoading pretrained model from: {args.model_path}")
-    model = AutoModel.from_pretrained(args.model_path, trust_remote_code=True)
-    model = model.to(device)
-
-    # Extract embeddings from pretrained model
-    print("\nExtracting train embeddings (pretrained)...")
-    train_embeddings, train_labels = extract_embeddings(
-        model, tokenizer,
-        train_df["sequence"].tolist(),
-        train_df["label"].tolist(),
-        args.batch_size, args.max_length, args.pooling, device,
-    )
-
-    print("\nExtracting validation embeddings (pretrained)...")
-    val_embeddings, val_labels = extract_embeddings(
-        model, tokenizer,
-        val_df["sequence"].tolist(),
-        val_df["label"].tolist(),
-        args.batch_size, args.max_length, args.pooling, device,
-    )
-
-    print("\nExtracting test embeddings (pretrained)...")
-    test_embeddings, test_labels = extract_embeddings(
-        model, tokenizer,
-        test_df["sequence"].tolist(),
-        test_df["label"].tolist(),
-        args.batch_size, args.max_length, args.pooling, device,
-    )
-
-    print(f"\nEmbedding shape: {test_embeddings.shape}")
-
-    # Save pretrained embeddings
+    # Check if embeddings already exist
     embeddings_path = os.path.join(args.output_dir, "embeddings_pretrained.npz")
-    np.savez(
-        embeddings_path,
-        train_embeddings=train_embeddings,
-        train_labels=train_labels,
-        val_embeddings=val_embeddings,
-        val_labels=val_labels,
-        test_embeddings=test_embeddings,
-        test_labels=test_labels,
-    )
-    print(f"\nSaved pretrained embeddings to: {embeddings_path}")
+    if os.path.exists(embeddings_path):
+        print(f"\nFound existing embeddings at: {embeddings_path}")
+        print("Loading embeddings from file (delete file to re-extract)...")
+        loaded = np.load(embeddings_path)
+        train_embeddings = loaded["train_embeddings"]
+        train_labels = loaded["train_labels"]
+        val_embeddings = loaded["val_embeddings"]
+        val_labels = loaded["val_labels"]
+        test_embeddings = loaded["test_embeddings"]
+        test_labels = loaded["test_labels"]
+        print(f"Loaded embeddings - shape: {test_embeddings.shape}")
+    else:
+        print(f"\nLoading pretrained model from: {args.model_path}")
+        model = AutoModel.from_pretrained(args.model_path, trust_remote_code=True)
+        model = model.to(device)
+
+        # Extract embeddings from pretrained model
+        print("\nExtracting train embeddings (pretrained)...")
+        train_embeddings, train_labels = extract_embeddings(
+            model, tokenizer,
+            train_df["sequence"].tolist(),
+            train_df["label"].tolist(),
+            args.batch_size, args.max_length, args.pooling, device,
+        )
+
+        print("\nExtracting validation embeddings (pretrained)...")
+        val_embeddings, val_labels = extract_embeddings(
+            model, tokenizer,
+            val_df["sequence"].tolist(),
+            val_df["label"].tolist(),
+            args.batch_size, args.max_length, args.pooling, device,
+        )
+
+        print("\nExtracting test embeddings (pretrained)...")
+        test_embeddings, test_labels = extract_embeddings(
+            model, tokenizer,
+            test_df["sequence"].tolist(),
+            test_df["label"].tolist(),
+            args.batch_size, args.max_length, args.pooling, device,
+        )
+
+        print(f"\nEmbedding shape: {test_embeddings.shape}")
+
+        # Save pretrained embeddings
+        np.savez(
+            embeddings_path,
+            train_embeddings=train_embeddings,
+            train_labels=train_labels,
+            val_embeddings=val_embeddings,
+            val_labels=val_labels,
+            test_embeddings=test_embeddings,
+            test_labels=test_labels,
+        )
+        print(f"\nSaved pretrained embeddings to: {embeddings_path}")
+
+        # Free model memory
+        del model
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     # Run analysis on pretrained embeddings
     pretrained_results = run_analysis_on_embeddings(
@@ -771,10 +788,6 @@ def main():
         args.seed, device,
     )
 
-    # Free memory
-    del model
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
-
     # ========== RANDOM BASELINE (if requested) ==========
     random_results = None
     if args.include_random_baseline:
@@ -782,45 +795,59 @@ def main():
         print("# RANDOM BASELINE MODEL ANALYSIS")
         print("#" * 60)
 
-        random_model = create_random_model(args.model_path, device, seed=args.seed + 1000)
-
-        # Extract embeddings from random model
-        print("\nExtracting train embeddings (random)...")
-        train_embeddings_rand, _ = extract_embeddings(
-            random_model, tokenizer,
-            train_df["sequence"].tolist(),
-            train_df["label"].tolist(),
-            args.batch_size, args.max_length, args.pooling, device,
-        )
-
-        print("\nExtracting validation embeddings (random)...")
-        val_embeddings_rand, _ = extract_embeddings(
-            random_model, tokenizer,
-            val_df["sequence"].tolist(),
-            val_df["label"].tolist(),
-            args.batch_size, args.max_length, args.pooling, device,
-        )
-
-        print("\nExtracting test embeddings (random)...")
-        test_embeddings_rand, _ = extract_embeddings(
-            random_model, tokenizer,
-            test_df["sequence"].tolist(),
-            test_df["label"].tolist(),
-            args.batch_size, args.max_length, args.pooling, device,
-        )
-
-        # Save random embeddings
+        # Check if random embeddings already exist
         embeddings_path_rand = os.path.join(args.output_dir, "embeddings_random.npz")
-        np.savez(
-            embeddings_path_rand,
-            train_embeddings=train_embeddings_rand,
-            train_labels=train_labels,
-            val_embeddings=val_embeddings_rand,
-            val_labels=val_labels,
-            test_embeddings=test_embeddings_rand,
-            test_labels=test_labels,
-        )
-        print(f"\nSaved random embeddings to: {embeddings_path_rand}")
+        if os.path.exists(embeddings_path_rand):
+            print(f"\nFound existing random embeddings at: {embeddings_path_rand}")
+            print("Loading embeddings from file (delete file to re-extract)...")
+            loaded_rand = np.load(embeddings_path_rand)
+            train_embeddings_rand = loaded_rand["train_embeddings"]
+            val_embeddings_rand = loaded_rand["val_embeddings"]
+            test_embeddings_rand = loaded_rand["test_embeddings"]
+            print(f"Loaded random embeddings - shape: {test_embeddings_rand.shape}")
+        else:
+            random_model = create_random_model(args.model_path, device, seed=args.seed + 1000)
+
+            # Extract embeddings from random model
+            print("\nExtracting train embeddings (random)...")
+            train_embeddings_rand, _ = extract_embeddings(
+                random_model, tokenizer,
+                train_df["sequence"].tolist(),
+                train_df["label"].tolist(),
+                args.batch_size, args.max_length, args.pooling, device,
+            )
+
+            print("\nExtracting validation embeddings (random)...")
+            val_embeddings_rand, _ = extract_embeddings(
+                random_model, tokenizer,
+                val_df["sequence"].tolist(),
+                val_df["label"].tolist(),
+                args.batch_size, args.max_length, args.pooling, device,
+            )
+
+            print("\nExtracting test embeddings (random)...")
+            test_embeddings_rand, _ = extract_embeddings(
+                random_model, tokenizer,
+                test_df["sequence"].tolist(),
+                test_df["label"].tolist(),
+                args.batch_size, args.max_length, args.pooling, device,
+            )
+
+            # Save random embeddings
+            np.savez(
+                embeddings_path_rand,
+                train_embeddings=train_embeddings_rand,
+                train_labels=train_labels,
+                val_embeddings=val_embeddings_rand,
+                val_labels=val_labels,
+                test_embeddings=test_embeddings_rand,
+                test_labels=test_labels,
+            )
+            print(f"\nSaved random embeddings to: {embeddings_path_rand}")
+
+            # Free memory
+            del random_model
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
         # Run analysis on random embeddings
         random_results = run_analysis_on_embeddings(
@@ -832,10 +859,6 @@ def main():
             args.nn_hidden_dim, args.nn_epochs, args.nn_lr,
             args.seed, device,
         )
-
-        # Free memory
-        del random_model
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     # ========== COMPILE FINAL RESULTS ==========
     results = {
