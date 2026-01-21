@@ -94,6 +94,12 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="If labels are present, calculate and save metrics to JSON",
     )
+    parser.add_argument(
+        "--tokenizer_path",
+        type=str,
+        default=None,
+        help="Path to tokenizer (default: uses model_path, or falls back to base model)",
+    )
     return parser.parse_args()
 
 
@@ -215,7 +221,18 @@ def main():
 
     # Load model and tokenizer
     print(f"\nLoading model from: {args.model_path}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+
+    # Determine tokenizer path (with fallback to base model)
+    tokenizer_path = args.tokenizer_path or args.model_path
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
+    except (OSError, EnvironmentError) as e:
+        # Fallback to base model tokenizer if custom tokenizer not found
+        print(f"  Tokenizer not found at {tokenizer_path}, falling back to base model...")
+        base_model = "GenerTeam/GENERanno-prokaryote-0.5b-base"
+        print(f"  Loading tokenizer from: {base_model}")
+        tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
+
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_path, trust_remote_code=True
     )
