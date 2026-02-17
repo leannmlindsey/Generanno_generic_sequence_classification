@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import time
+import traceback
 from typing import Dict, List, Tuple, Optional
 
 import matplotlib
@@ -790,79 +791,15 @@ def main():
         args.seed, device,
     )
 
-    # ========== RANDOM BASELINE (if requested) ==========
-    random_results = None
-    if args.include_random_baseline:
-        print("\n" + "#" * 60)
-        print("# RANDOM BASELINE MODEL ANALYSIS")
-        print("#" * 60)
+    # ========== SAVE PRETRAINED RESULTS IMMEDIATELY ==========
+    results_path = os.path.join(args.output_dir, "embedding_analysis_results.json")
 
-        # Check if random embeddings already exist
-        embeddings_path_rand = os.path.join(args.output_dir, "embeddings_random.npz")
-        if os.path.exists(embeddings_path_rand):
-            print(f"\nFound existing random embeddings at: {embeddings_path_rand}")
-            print("Loading embeddings from file (delete file to re-extract)...")
-            loaded_rand = np.load(embeddings_path_rand)
-            train_embeddings_rand = loaded_rand["train_embeddings"]
-            val_embeddings_rand = loaded_rand["val_embeddings"]
-            test_embeddings_rand = loaded_rand["test_embeddings"]
-            print(f"Loaded random embeddings - shape: {test_embeddings_rand.shape}")
-        else:
-            random_model = create_random_model(args.model_path, device, seed=args.seed + 1000)
+    def save_results_json(results, path):
+        """Save results to JSON (called incrementally)."""
+        with open(path, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"Saved results to: {path}")
 
-            # Extract embeddings from random model
-            print("\nExtracting train embeddings (random)...")
-            train_embeddings_rand, _ = extract_embeddings(
-                random_model, tokenizer,
-                train_df["sequence"].tolist(),
-                train_df["label"].tolist(),
-                args.batch_size, args.max_length, args.pooling, device,
-            )
-
-            print("\nExtracting validation embeddings (random)...")
-            val_embeddings_rand, _ = extract_embeddings(
-                random_model, tokenizer,
-                val_df["sequence"].tolist(),
-                val_df["label"].tolist(),
-                args.batch_size, args.max_length, args.pooling, device,
-            )
-
-            print("\nExtracting test embeddings (random)...")
-            test_embeddings_rand, _ = extract_embeddings(
-                random_model, tokenizer,
-                test_df["sequence"].tolist(),
-                test_df["label"].tolist(),
-                args.batch_size, args.max_length, args.pooling, device,
-            )
-
-            # Save random embeddings
-            np.savez(
-                embeddings_path_rand,
-                train_embeddings=train_embeddings_rand,
-                train_labels=train_labels,
-                val_embeddings=val_embeddings_rand,
-                val_labels=val_labels,
-                test_embeddings=test_embeddings_rand,
-                test_labels=test_labels,
-            )
-            print(f"\nSaved random embeddings to: {embeddings_path_rand}")
-
-            # Free memory
-            del random_model
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
-
-        # Run analysis on random embeddings
-        random_results = run_analysis_on_embeddings(
-            train_embeddings_rand, train_labels,
-            val_embeddings_rand, val_labels,
-            test_embeddings_rand, test_labels,
-            test_df["sequence"].tolist(),
-            args.output_dir, "random",
-            args.nn_hidden_dim, args.nn_epochs, args.nn_lr,
-            args.seed, device,
-        )
-
-    # ========== COMPILE FINAL RESULTS ==========
     results = {
         "model_path": args.model_path,
         "csv_dir": args.csv_dir,
@@ -878,39 +815,121 @@ def main():
     for key, value in pretrained_results.items():
         results[f"pretrained_{key}"] = value
 
-    # Add random results and compute embedding power if available
-    if random_results is not None:
-        for key, value in random_results.items():
-            results[f"random_{key}"] = value
+    # Save pretrained results now (so they're preserved even if random baseline fails)
+    save_results_json(results, results_path)
 
-        # Compute embedding power (pretrained - random)
-        print("\n" + "=" * 60)
-        print("Computing Embedding Power (Pretrained - Random)")
-        print("=" * 60)
+    # ========== RANDOM BASELINE (if requested) ==========
+    random_results = None
+    embedding_power = {}
 
-        embedding_power = {}
-        metrics_to_compare = [
-            "linear_probe_accuracy", "linear_probe_f1", "linear_probe_mcc", "linear_probe_auc",
-            "nn_accuracy", "nn_f1", "nn_mcc", "nn_auc",
-            "silhouette_score",
-        ]
+    print(f"\nRandom baseline requested: {args.include_random_baseline}")
 
-        for metric in metrics_to_compare:
-            pretrained_val = pretrained_results.get(metric, 0)
-            random_val = random_results.get(metric, 0)
-            power = pretrained_val - random_val
-            embedding_power[f"embedding_power_{metric}"] = power
-            print(f"  {metric}: {pretrained_val:.4f} - {random_val:.4f} = {power:+.4f}")
+    if args.include_random_baseline:
+        print("\n" + "#" * 60)
+        print("# RANDOM BASELINE MODEL ANALYSIS")
+        print("#" * 60)
 
-        results.update(embedding_power)
+        try:
+            # Check if random embeddings already exist
+            embeddings_path_rand = os.path.join(args.output_dir, "embeddings_random.npz")
+            if os.path.exists(embeddings_path_rand):
+                print(f"\nFound existing random embeddings at: {embeddings_path_rand}")
+                print("Loading embeddings from file (delete file to re-extract)...")
+                loaded_rand = np.load(embeddings_path_rand)
+                train_embeddings_rand = loaded_rand["train_embeddings"]
+                val_embeddings_rand = loaded_rand["val_embeddings"]
+                test_embeddings_rand = loaded_rand["test_embeddings"]
+                print(f"Loaded random embeddings - shape: {test_embeddings_rand.shape}")
+            else:
+                random_model = create_random_model(args.model_path, device, seed=args.seed + 1000)
 
-    # Save results
-    results_path = os.path.join(args.output_dir, "embedding_analysis_results.json")
-    with open(results_path, "w") as f:
-        json.dump(results, f, indent=2)
-    print(f"\nSaved results to: {results_path}")
+                # Extract embeddings from random model
+                print("\nExtracting train embeddings (random)...")
+                train_embeddings_rand, _ = extract_embeddings(
+                    random_model, tokenizer,
+                    train_df["sequence"].tolist(),
+                    train_df["label"].tolist(),
+                    args.batch_size, args.max_length, args.pooling, device,
+                )
 
-    # Print summary
+                print("\nExtracting validation embeddings (random)...")
+                val_embeddings_rand, _ = extract_embeddings(
+                    random_model, tokenizer,
+                    val_df["sequence"].tolist(),
+                    val_df["label"].tolist(),
+                    args.batch_size, args.max_length, args.pooling, device,
+                )
+
+                print("\nExtracting test embeddings (random)...")
+                test_embeddings_rand, _ = extract_embeddings(
+                    random_model, tokenizer,
+                    test_df["sequence"].tolist(),
+                    test_df["label"].tolist(),
+                    args.batch_size, args.max_length, args.pooling, device,
+                )
+
+                # Save random embeddings
+                np.savez(
+                    embeddings_path_rand,
+                    train_embeddings=train_embeddings_rand,
+                    train_labels=train_labels,
+                    val_embeddings=val_embeddings_rand,
+                    val_labels=val_labels,
+                    test_embeddings=test_embeddings_rand,
+                    test_labels=test_labels,
+                )
+                print(f"\nSaved random embeddings to: {embeddings_path_rand}")
+
+                # Free memory
+                del random_model
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+            # Run analysis on random embeddings
+            random_results = run_analysis_on_embeddings(
+                train_embeddings_rand, train_labels,
+                val_embeddings_rand, val_labels,
+                test_embeddings_rand, test_labels,
+                test_df["sequence"].tolist(),
+                args.output_dir, "random",
+                args.nn_hidden_dim, args.nn_epochs, args.nn_lr,
+                args.seed, device,
+            )
+
+            # Add random results to JSON
+            for key, value in random_results.items():
+                results[f"random_{key}"] = value
+
+            # Compute embedding power (pretrained - random)
+            print("\n" + "=" * 60)
+            print("Computing Embedding Power (Pretrained - Random)")
+            print("=" * 60)
+
+            metrics_to_compare = [
+                "linear_probe_accuracy", "linear_probe_f1", "linear_probe_mcc", "linear_probe_auc",
+                "nn_accuracy", "nn_f1", "nn_mcc", "nn_auc",
+                "silhouette_score",
+            ]
+
+            for metric in metrics_to_compare:
+                pretrained_val = pretrained_results.get(metric, 0)
+                random_val = random_results.get(metric, 0)
+                power = pretrained_val - random_val
+                embedding_power[f"embedding_power_{metric}"] = power
+                print(f"  {metric}: {pretrained_val:.4f} - {random_val:.4f} = {power:+.4f}")
+
+            results.update(embedding_power)
+
+            # Update JSON with random results + embedding power
+            save_results_json(results, results_path)
+
+        except Exception as e:
+            print(f"\n{'!' * 60}")
+            print(f"ERROR during random baseline: {e}")
+            print(f"{'!' * 60}")
+            print("Pretrained results were already saved. Random baseline skipped.")
+            traceback.print_exc()
+
+    # ========== PRINT SUMMARY ==========
     print("\n" + "=" * 60)
     print("SUMMARY - PRETRAINED MODEL")
     print("=" * 60)
