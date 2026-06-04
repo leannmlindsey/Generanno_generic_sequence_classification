@@ -52,8 +52,8 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_HOME=${HF_HOME:-/data/lindseylm/.cache/huggingface}
 
-# REPO_ROOT is supplied by the launcher via --export. SLURM stages this script
-# to /var/spool/slurm/... so BASH_SOURCE[0] would not resolve to the real repo.
+# REPO_ROOT is supplied by the launcher via --export (the batch script is staged
+# to the SLURM spool dir, so its own path can't be used to find the repo).
 # The modules are invoked as `python -m src.tasks...` so we must cd to the repo
 # root and put it on PYTHONPATH.
 if [ -z "${REPO_ROOT:-}" ]; then
