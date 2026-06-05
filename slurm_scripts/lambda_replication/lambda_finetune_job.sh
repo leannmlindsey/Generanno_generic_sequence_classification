@@ -52,6 +52,11 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_HOME=${HF_HOME:-/data/lindseylm/.cache/huggingface}
 
+# Disable Weights & Biases: HF Trainer auto-enables it, but compute nodes are
+# offline and there is no wandb API key, so wandb.init() would abort the job.
+export WANDB_DISABLED=true
+export WANDB_MODE=disabled
+
 # REPO_ROOT is supplied by the launcher via --export (the batch script is staged
 # to the SLURM spool dir, so its own path can't be used to find the repo).
 # The modules are invoked as `python -m src.tasks...` so we must cd to the repo
