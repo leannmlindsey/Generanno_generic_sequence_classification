@@ -52,9 +52,11 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_HOME=${HF_HOME:-/data/lindseylm/.cache/huggingface}
 
-# Disable Weights & Biases: HF Trainer auto-enables it, but compute nodes are
-# offline and there is no wandb API key, so wandb.init() would abort the job.
-export WANDB_DISABLED=true
+# Neutralize Weights & Biases for offline runs. The repo's hf config sets
+# report_to=["wandb"], so the WandbCallback is always added — WANDB_MODE=disabled
+# makes wandb.init() a no-op (no API key / no network needed).
+# Do NOT set WANDB_DISABLED: it makes transformers treat wandb as "not installed",
+# and the forced WandbCallback then raises "requires wandb to be installed".
 export WANDB_MODE=disabled
 
 # REPO_ROOT is supplied by the launcher via --export (the batch script is staged
