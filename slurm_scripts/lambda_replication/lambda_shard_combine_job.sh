@@ -61,14 +61,18 @@ INCLUDE_RANDOM_BASELINE=${INCLUDE_RANDOM_BASELINE:-false}
 echo "  output:   ${OUTPUT_DIR}"
 echo "  random_baseline=${INCLUDE_RANDOM_BASELINE}"
 
-# 1) Concatenate shards -> embeddings_pretrained.npz (+ embeddings_random.npz).
-python -m src.tasks.downstream.shard_embeddings \
-    --mode=combine --which=pretrained --output_dir="${OUTPUT_DIR}"
+# 1) Concatenate shards -> embeddings_<which>.npz, for each model we sharded.
+#    COMBINE_WHICH defaults to the full pair; for a random-only rebuild it is just
+#    "random" and the cached embeddings_pretrained.npz is left in place + reused.
+COMBINE_WHICH="${COMBINE_WHICH:-pretrained random}"
+echo "  combining: ${COMBINE_WHICH}"
+for w in ${COMBINE_WHICH}; do
+    python -m src.tasks.downstream.shard_embeddings \
+        --mode=combine --which="${w}" --output_dir="${OUTPUT_DIR}"
+done
 
 RANDOM_BASELINE_FLAG=""
 if [ "${INCLUDE_RANDOM_BASELINE}" == "true" ]; then
-    python -m src.tasks.downstream.shard_embeddings \
-        --mode=combine --which=random --output_dir="${OUTPUT_DIR}"
     RANDOM_BASELINE_FLAG="--include_random_baseline"
 fi
 

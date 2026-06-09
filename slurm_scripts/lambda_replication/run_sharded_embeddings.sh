@@ -45,6 +45,12 @@ WHICH_LIST=(pretrained)
 if [ "${INCLUDE_RANDOM_BASELINE:-false}" == "true" ]; then
     WHICH_LIST+=(random)
 fi
+# WHICH_ONLY restricts to a single model (e.g. WHICH_ONLY=random) to rebuild ONLY
+# those embeddings while REUSING an already-cached embeddings_<other>.npz. Use
+# this to finish a random baseline when pretrained already completed + cached.
+if [ -n "${WHICH_ONLY:-}" ]; then
+    WHICH_LIST=("${WHICH_ONLY}")
+fi
 
 mkdir -p "${OUTPUT_DIR}/logs"
 LOGDIR="${OUTPUT_DIR}/logs"
@@ -102,10 +108,13 @@ for LEN in "${LENS[@]}"; do
         mkdir -p "${EMB_OUTPUT_DIR}"
 
         # Start clean: stale shards from a prior run (different shard counts)
-        # would corrupt the combine's coverage check.
+        # would corrupt the combine's coverage check. Only delete the npz we are
+        # about to REBUILD — a cached embeddings_<other>.npz (e.g. pretrained when
+        # WHICH_ONLY=random) is preserved and reused by the analysis step.
         rm -rf "${EMB_OUTPUT_DIR}/_shards"
-        rm -f  "${EMB_OUTPUT_DIR}/embeddings_pretrained.npz" \
-               "${EMB_OUTPUT_DIR}/embeddings_random.npz"
+        for w in "${WHICH_LIST[@]}"; do
+            rm -f "${EMB_OUTPUT_DIR}/embeddings_${w}.npz"
+        done
 
         echo ""
         echo "--- ${LEN} / ${VARIANT}  (out: ${EMB_OUTPUT_DIR}) ---"
@@ -140,7 +149,7 @@ for LEN in "${LENS[@]}"; do
             --output="${LOGDIR}/${CJOB}_%j.out" \
             --error="${LOGDIR}/${CJOB}_%j.err" \
             "${COMBINE_FLAGS[@]}" \
-            --export="ALL,REPO_ROOT=${REPO_ROOT},CONDA_ENV=${CONDA_ENV},HF_HOME=${HF_HOME},MODEL_PATH=${BASE_MODEL},CSV_DIR=${CSV_DIR},OUTPUT_DIR=${EMB_OUTPUT_DIR},BATCH_SIZE=${INF_BATCH_SIZE},MAX_LENGTH=${MAX_LENGTH},POOLING=${POOLING},EMB_SEED=${EMB_SEED},NN_EPOCHS=${NN_EPOCHS},NN_HIDDEN_DIM=${NN_HIDDEN_DIM},NN_LR=${NN_LR},INCLUDE_RANDOM_BASELINE=${INCLUDE_RANDOM_BASELINE:-false},LEN=${LEN}" \
+            --export="ALL,REPO_ROOT=${REPO_ROOT},CONDA_ENV=${CONDA_ENV},HF_HOME=${HF_HOME},MODEL_PATH=${BASE_MODEL},CSV_DIR=${CSV_DIR},OUTPUT_DIR=${EMB_OUTPUT_DIR},BATCH_SIZE=${INF_BATCH_SIZE},MAX_LENGTH=${MAX_LENGTH},POOLING=${POOLING},EMB_SEED=${EMB_SEED},NN_EPOCHS=${NN_EPOCHS},NN_HIDDEN_DIM=${NN_HIDDEN_DIM},NN_LR=${NN_LR},INCLUDE_RANDOM_BASELINE=${INCLUDE_RANDOM_BASELINE:-false},COMBINE_WHICH=${WHICH_LIST[*]},LEN=${LEN}" \
             "${COMBINE_JOB}"
         TOTAL_JOBS=$((TOTAL_JOBS + 1))
     done
