@@ -32,4 +32,7 @@ dataloader_num_workers: 4
 remove_unused_columns: false
 
 push_to_hub: false
-report_to: [ "wandb" ]
+# No experiment trackers: Biowulf compute nodes are offline and there is no wandb
+# API key. With "wandb" here HF Trainer force-adds the WandbCallback, which aborts
+# the job. "none" means the Trainer adds no logging integration at all.
+report_to: [ "none" ]
