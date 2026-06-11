@@ -34,7 +34,7 @@
 
 # Absolute path to this lambda_replication dir on Biowulf (hardcoded so it is
 # correct no matter what directory the script is launched/submitted from).
-SCRIPT_DIR="/vf/users/lindseylm/GLM_EVALUATIONS/NAR_GENOMICS_LAMBDA_REPO/Generanno_generic_sequence_classification/slurm_scripts/lambda_replication"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$( cd "${SCRIPT_DIR}/../.." && pwd )"
 CONFIG="${SCRIPT_DIR}/lambda_replication.conf"
 
@@ -83,8 +83,8 @@ LOGDIR="${OUTPUT_DIR}/logs"
 
 # --- common sbatch flags ------------------------------------------------------
 
-INF_FLAGS=(--partition=gpu --gres=gpu:a100:1 --mem="${INF_MEM}" --time="${INF_TIME}" --cpus-per-task=8)
-EMB_FLAGS=(--partition=gpu --gres=gpu:a100:1 --mem="${EMB_MEM}" --time="${EMB_TIME}" --cpus-per-task=8)
+INF_FLAGS=(--account=bfzj-dtai-gh --partition=ghx4 --gpus-per-node=1 --mem="${INF_MEM}" --time="${INF_TIME}" --cpus-per-task=8)
+EMB_FLAGS=(--account=bfzj-dtai-gh --partition=ghx4 --gpus-per-node=1 --mem="${EMB_MEM}" --time="${EMB_TIME}" --cpus-per-task=8)
 
 EMB_ENV_BASE="REPO_ROOT=${REPO_ROOT},CONDA_ENV=${CONDA_ENV},HF_HOME=${HF_HOME},BASE_MODEL=${BASE_MODEL},POOLING=${POOLING},EMB_SEED=${EMB_SEED},NN_EPOCHS=${NN_EPOCHS},NN_HIDDEN_DIM=${NN_HIDDEN_DIM},NN_LR=${NN_LR},BATCH_SIZE=${INF_BATCH_SIZE},INCLUDE_RANDOM_BASELINE=${INCLUDE_RANDOM_BASELINE:-false}"
 

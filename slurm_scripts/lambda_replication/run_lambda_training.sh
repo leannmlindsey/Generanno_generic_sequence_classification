@@ -24,7 +24,7 @@
 
 # Absolute path to this lambda_replication dir on Biowulf (hardcoded so it is
 # correct no matter what directory the script is launched/submitted from).
-SCRIPT_DIR="/vf/users/lindseylm/GLM_EVALUATIONS/NAR_GENOMICS_LAMBDA_REPO/Generanno_generic_sequence_classification/slurm_scripts/lambda_replication"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # REPO_ROOT is the repo top (holds src/, slurm_scripts/).
 # slurm_scripts/lambda_replication -> ../.. == repo root.
 REPO_ROOT="$( cd "${SCRIPT_DIR}/../.." && pwd )"
@@ -96,7 +96,7 @@ echo "============================================================"
 
 # --- common sbatch flags ------------------------------------------------------
 
-FT_FLAGS=(--partition=gpu --gres=gpu:a100:1 --mem="${FT_MEM}" --time="${FT_TIME}" --cpus-per-task=8)
+FT_FLAGS=(--account=bfzj-dtai-gh --partition=ghx4 --gpus-per-node=1 --mem="${FT_MEM}" --time="${FT_TIME}" --cpus-per-task=8)
 
 # REPO_ROOT is propagated to every job so they can cd to the real repo — SLURM
 # stages each job script to /var/spool/slurm/... where BASH_SOURCE[0] can't

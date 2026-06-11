@@ -55,8 +55,8 @@ fi
 mkdir -p "${OUTPUT_DIR}/logs"
 LOGDIR="${OUTPUT_DIR}/logs"
 
-EXTRACT_FLAGS=(--partition=gpu --gres=gpu:a100:1 --mem="${EMB_MEM}" --time="${SHARD_TIME}" --cpus-per-task=8)
-COMBINE_FLAGS=(--partition=gpu --gres=gpu:a100:1 --mem="${EMB_MEM}" --time="2:00:00" --cpus-per-task=8)
+EXTRACT_FLAGS=(--account=bfzj-dtai-gh --partition=ghx4 --gpus-per-node=1 --mem="${EMB_MEM}" --time="${SHARD_TIME}" --cpus-per-task=8)
+COMBINE_FLAGS=(--account=bfzj-dtai-gh --partition=ghx4 --gpus-per-node=1 --mem="${EMB_MEM}" --time="2:00:00" --cpus-per-task=8)
 
 # data rows in a CSV (minus the header)
 rows_of() { echo $(( $(wc -l < "$1") - 1 )); }

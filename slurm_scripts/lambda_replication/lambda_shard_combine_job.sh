@@ -20,19 +20,24 @@ set -uo pipefail
 echo "=== shard-combine + analysis len=${LEN:-?} ==="
 echo "Started at: $(date)  Node: $(hostname)  Job: ${SLURM_JOB_ID:-N/A}"
 
-module load CUDA/12.8
-source /data/lindseylm/conda/etc/profile.d/conda.sh
-if [ -z "${CUDA_HOME:-}" ]; then
-    NVCC_PATH=$(which nvcc)
-    if [ -n "${NVCC_PATH}" ]; then
-        export CUDA_HOME=$(dirname $(dirname "${NVCC_PATH}"))
-    fi
-fi
-conda activate "${CONDA_ENV:-generanno_env}"
-if [ "${CONDA_DEFAULT_ENV}" != "${CONDA_ENV:-generanno_env}" ]; then
-    echo "ERROR: could not activate conda env '${CONDA_ENV:-generanno_env}' (active: '${CONDA_DEFAULT_ENV:-none}'). Aborting." >&2
-    exit 1
-fi
+# --- conda env setup: BIOWULF ONLY, disabled for Delta ---------------------
+# Delta-AI inherits the submitting shell's environment (sbatch --export=ALL), so
+# activate the conda env (and load any needed module) on the LOGIN node BEFORE
+# running the driver. The block below was needed on Biowulf, where jobs did not
+# inherit the submitting shell's environment.
+# module load CUDA/12.8
+# source /data/lindseylm/conda/etc/profile.d/conda.sh
+# if [ -z "${CUDA_HOME:-}" ]; then
+#     NVCC_PATH=$(which nvcc)
+#     if [ -n "${NVCC_PATH}" ]; then
+#         export CUDA_HOME=$(dirname $(dirname "${NVCC_PATH}"))
+#     fi
+# fi
+# conda activate "${CONDA_ENV:-generanno_env}"
+# if [ "${CONDA_DEFAULT_ENV}" != "${CONDA_ENV:-generanno_env}" ]; then
+#     echo "ERROR: could not activate conda env '${CONDA_ENV:-generanno_env}' (active: '${CONDA_DEFAULT_ENV:-none}'). Aborting." >&2
+#     exit 1
+# fi
 echo "  conda env: ${CONDA_DEFAULT_ENV}   python: $(command -v python)"
 export PYTHONNOUSERSITE=1
 export CUDA_VISIBLE_DEVICES=0
@@ -40,7 +45,7 @@ export TOKENIZERS_PARALLELISM=false
 
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
-export HF_HOME=${HF_HOME:-/data/lindseylm/.cache/huggingface}
+export HF_HOME=${HF_HOME:-/work/hdd/bfzj/llindsey1/LAMBDA_REPLICATION/hf_cache}
 
 if [ -z "${REPO_ROOT:-}" ]; then
     echo "ERROR: REPO_ROOT is not set; the launcher must pass it via --export"; exit 1
