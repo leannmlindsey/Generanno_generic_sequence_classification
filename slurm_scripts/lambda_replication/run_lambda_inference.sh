@@ -189,16 +189,39 @@ for LEN in ${RUN_LENGTHS}; do
 
     for VARIANT in ${VARIANTS}; do
         # --- embedding analysis (Surface D) — independent of winners ---
+        # Skip if the embedding analysis is ALREADY complete for this
+        # length/variant (e.g. it was produced separately by the sharded
+        # embedding pipeline, run_sharded_embeddings.sh). "Complete" means the
+        # results JSON exists; when a random baseline was requested
+        # (INCLUDE_RANDOM_BASELINE=true) it must ALSO contain the random-baseline
+        # results — the embedding_power_* keys only appear once the random
+        # baseline finished — otherwise we re-run to fill it in. Set
+        # FORCE_EMBEDDING=true to re-run regardless.
         EMB_J="emb_${LEN}_${VARIANT}"
-        echo "    submitting ${EMB_J}..."
-        sbatch \
-            --job-name="${EMB_J}" \
-            --output="${LOGDIR}/${EMB_J}_%j.out" \
-            --error="${LOGDIR}/${EMB_J}_%j.err" \
-            "${EMB_FLAGS[@]}" \
-            --export="ALL,REPL_OUTPUT_DIR=${REPL_LEN_DIR},CSV_DIR=${CSV_DIR},${EMB_ENV_BASE},VARIANT=${VARIANT},LEN=${LEN},MAX_LENGTH=${MAX_LENGTH}" \
-            "${EMB_JOB}"
-        NUM_JOBS=$((NUM_JOBS + 1))
+        EMB_RESULTS="${REPL_LEN_DIR}/embedding/${VARIANT}/embedding_analysis_results.json"
+        emb_complete=0
+        if [ -f "${EMB_RESULTS}" ]; then
+            if [ "${INCLUDE_RANDOM_BASELINE:-false}" == "true" ]; then
+                grep -q "embedding_power" "${EMB_RESULTS}" && emb_complete=1
+            else
+                emb_complete=1
+            fi
+        fi
+
+        if [ "${emb_complete}" -eq 1 ] && [ "${FORCE_EMBEDDING:-false}" != "true" ]; then
+            echo "    embedding analysis already complete for ${LEN}/${VARIANT} — skipping ${EMB_J}"
+            echo "      (${EMB_RESULTS}; set FORCE_EMBEDDING=true to re-run)"
+        else
+            echo "    submitting ${EMB_J}..."
+            sbatch \
+                --job-name="${EMB_J}" \
+                --output="${LOGDIR}/${EMB_J}_%j.out" \
+                --error="${LOGDIR}/${EMB_J}_%j.err" \
+                "${EMB_FLAGS[@]}" \
+                --export="ALL,REPL_OUTPUT_DIR=${REPL_LEN_DIR},CSV_DIR=${CSV_DIR},${EMB_ENV_BASE},VARIANT=${VARIANT},LEN=${LEN},MAX_LENGTH=${MAX_LENGTH}" \
+                "${EMB_JOB}"
+            NUM_JOBS=$((NUM_JOBS + 1))
+        fi
 
         # Skip prediction surfaces if no winning seed for this variant.
         if [[ " ${HAVE_VARIANTS} " != *" ${VARIANT} "* ]]; then
