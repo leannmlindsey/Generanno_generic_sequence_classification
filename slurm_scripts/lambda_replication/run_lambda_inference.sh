@@ -154,6 +154,19 @@ for LEN in ${RUN_LENGTHS}; do
         fi
     fi
 
+    # Optional PHROG (phage-annotated) — indirect lookup on PHROG_<LEN> (2k only).
+    # The annotated CDS subset, DISTINCT from FNR; feeds the paper's PHROG table.
+    phrog_var="PHROG_${LEN}"
+    PHROG_PATH="${!phrog_var:-}"
+    if [ -n "${PHROG_PATH}" ]; then
+        if [ -f "${PHROG_PATH}" ]; then
+            DIAG_NAMES+=(phrog)
+            DIAG_PATHS+=("${PHROG_PATH}")
+        else
+            echo "  WARNING: ${phrog_var}=${PHROG_PATH} not found — skipping phrog for ${LEN}"
+        fi
+    fi
+
     # Warn-and-SKIP any built-in diagnostic that is missing (defensive; not fatal).
     declare -a RUN_NAMES RUN_PATHS
     RUN_NAMES=(); RUN_PATHS=()
@@ -240,13 +253,21 @@ for LEN in ${RUN_LENGTHS}; do
             NAME="${RUN_NAMES[$i]}"
             CSV="${RUN_PATHS[$i]}"
             JOB="inf_${LEN}_${VARIANT}_${NAME}"
-            echo "    submitting ${JOB} -> ${NAME}_predictions.csv ..."
+            # PHROG uses the canonical model-prefixed name the central PHROG table
+            # reads: ${PHROG_MODEL_TAG}_<input-stem>_predictions.csv. All other
+            # diagnostics use the plain canonical ${NAME}_predictions.csv.
+            if [ "${NAME}" = "phrog" ]; then
+                OUT_NAME="${PHROG_MODEL_TAG:-GENERanno}_$(basename "${CSV}" .csv)_predictions.csv"
+            else
+                OUT_NAME="${NAME}_predictions.csv"
+            fi
+            echo "    submitting ${JOB} -> ${OUT_NAME} ..."
             sbatch \
                 --job-name="${JOB}" \
                 --output="${LOGDIR}/${JOB}_%j.out" \
                 --error="${LOGDIR}/${JOB}_%j.err" \
                 "${INF_FLAGS[@]}" \
-                --export="ALL,${INF_ENV},INPUT_CSV=${CSV},OUTPUT_FILENAME=${NAME}_predictions.csv" \
+                --export="ALL,${INF_ENV},INPUT_CSV=${CSV},OUTPUT_FILENAME=${OUT_NAME}" \
                 "${INF_JOB}"
             NUM_JOBS=$((NUM_JOBS + 1))
         done
