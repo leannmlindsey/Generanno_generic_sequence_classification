@@ -812,9 +812,21 @@ def main():
     results_path = os.path.join(args.output_dir, "embedding_analysis_results.json")
 
     def save_results_json(results, path):
-        """Save results to JSON (called incrementally)."""
+        """Save results to JSON, MERGING into any existing file. This lets a
+        pretrained-only re-run (INCLUDE_RANDOM_BASELINE=false) refresh the
+        pretrained_* keys and save the probe artifacts WITHOUT dropping the
+        random_* / embedding_power_* keys written by a prior full run — so a
+        later re-harvest keeps the random-baseline columns."""
+        merged = {}
+        if os.path.isfile(path):
+            try:
+                with open(path) as f:
+                    merged = json.load(f)
+            except Exception:
+                merged = {}
+        merged.update(results)
         with open(path, "w") as f:
-            json.dump(results, f, indent=2)
+            json.dump(merged, f, indent=2)
         print(f"Saved results to: {path}")
 
     results = {
