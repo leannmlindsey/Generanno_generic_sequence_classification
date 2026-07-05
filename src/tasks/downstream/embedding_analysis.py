@@ -18,6 +18,7 @@ Usage:
 import argparse
 import json
 import os
+import pickle
 import time
 import traceback
 from typing import Dict, List, Tuple, Optional
@@ -332,12 +333,13 @@ def train_linear_probe(
     print(f"  MCC: {metrics['linear_probe_mcc']:.4f}")
     print(f"  AUC: {metrics['linear_probe_auc']:.4f}")
 
-    # Return metrics and predictions
+    # Return metrics, the fitted classifier + scaler (so the probe can be saved
+    # and deployed for genome-wide/diagnostic inference), and predictions.
     predictions = {
         "test_preds": test_preds,
         "test_probs": test_probs,
     }
-    return metrics, predictions
+    return metrics, clf, scaler, predictions
 
 
 def calculate_silhouette(
@@ -629,7 +631,7 @@ def run_analysis_on_embeddings(
     results = {}
 
     # 1. Train linear probe
-    linear_metrics, linear_preds = train_linear_probe(
+    linear_metrics, linear_clf, linear_scaler, linear_preds = train_linear_probe(
         train_embeddings, train_labels,
         test_embeddings, test_labels,
         seed,
@@ -680,6 +682,21 @@ def run_analysis_on_embeddings(
         "hidden_dim": nn_hidden_dim,
     }, nn_model_path)
     print(f"\nSaved 3-layer NN to: {nn_model_path}")
+
+    # Save the NN's StandardScaler — REQUIRED to apply the saved NN at inference
+    # time (embeddings must be standardized with the same fit). Mirrors ProkBERT's
+    # three_layer_nn_pretrained_scaler.pkl.
+    nn_scaler_path = os.path.join(output_dir, f"three_layer_nn_{prefix}_scaler.pkl")
+    with open(nn_scaler_path, "wb") as f:
+        pickle.dump(nn_scaler, f)
+    print(f"Saved 3-layer NN scaler to: {nn_scaler_path}")
+
+    # Save the linear probe (classifier + scaler together), so an LP winner can be
+    # deployed for inference. Mirrors ProkBERT's linear_probe_pretrained.pkl.
+    lp_path = os.path.join(output_dir, f"linear_probe_{prefix}.pkl")
+    with open(lp_path, "wb") as f:
+        pickle.dump({"classifier": linear_clf, "scaler": linear_scaler}, f)
+    print(f"Saved linear probe to: {lp_path}")
 
     return results
 

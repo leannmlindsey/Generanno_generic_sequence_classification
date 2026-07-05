@@ -39,6 +39,7 @@ REPO_ROOT="$( cd "${SCRIPT_DIR}/../.." && pwd )"
 CONFIG="${SCRIPT_DIR}/lambda_replication.conf"
 
 INF_JOB="${SCRIPT_DIR}/lambda_inference_job.sh"
+PROBE_JOB="${SCRIPT_DIR}/lambda_probe_inference_job.sh"
 EMB_JOB="${SCRIPT_DIR}/lambda_embedding_job.sh"
 
 if [ ! -f "${CONFIG}" ]; then
@@ -49,6 +50,9 @@ source "${CONFIG}"
 
 if [ ! -f "${INF_JOB}" ]; then
     echo "ERROR: missing inference job body ${INF_JOB}"; exit 1
+fi
+if [ ! -f "${PROBE_JOB}" ]; then
+    echo "ERROR: missing probe inference job body ${PROBE_JOB}"; exit 1
 fi
 if [ ! -f "${EMB_JOB}" ]; then
     echo "ERROR: missing embedding job body ${EMB_JOB}"; exit 1
@@ -236,17 +240,38 @@ for LEN in ${RUN_LENGTHS}; do
             NUM_JOBS=$((NUM_JOBS + 1))
         fi
 
+        # Embedding-only mode: embedding was submitted above; skip all inference.
+        # Use this to (re)generate the saved probe artifacts first, wait for the
+        # jobs to finish, THEN run the plain pass so a probe winner's artifacts
+        # exist before inference reads them.
+        if [ "${SKIP_INFERENCE:-false}" = "true" ]; then
+            continue
+        fi
+
         # Skip prediction surfaces if no winning seed for this variant.
         if [[ " ${HAVE_VARIANTS} " != *" ${VARIANT} "* ]]; then
             echo "    skip ${VARIANT} predictions: no winner (training incomplete?)"
             continue
         fi
 
-        # Resolve the winning model path (best_model/) from winners.json.
-        MODEL_PATH=$(python -c "import json; print(json.load(open('${WINNERS_JSON}'))['${VARIANT}']['path'])")
-        echo "    winner model: ${MODEL_PATH}"
+        # Resolve the winner from winners.json. select_best_model.py picks the best
+        # of {finetune (5-seed mean), 3-layer NN, linear probe}. A finetune winner
+        # is deployed via its best-seed checkpoint (lambda_inference_job.sh); a probe
+        # winner via the saved probe artifacts (lambda_probe_inference_job.sh).
+        WINNER_TYPE=$(python -c "import json;print(json.load(open('${WINNERS_JSON}'))['${VARIANT}'].get('type','finetune'))")
+        WINNER_PATH=$(python -c "import json;print(json.load(open('${WINNERS_JSON}'))['${VARIANT}'].get('path','-'))")
+        WINNER_HEAD=$(python -c "import json;print(json.load(open('${WINNERS_JSON}'))['${VARIANT}'].get('head_path','-'))")
+        WINNER_SCALER=$(python -c "import json;print(json.load(open('${WINNERS_JSON}'))['${VARIANT}'].get('scaler_path','-'))")
 
-        INF_ENV="REPO_ROOT=${REPO_ROOT},CONDA_ENV=${CONDA_ENV},HF_HOME=${HF_HOME},REPL_OUTPUT_DIR=${REPL_LEN_DIR},VARIANT=${VARIANT},MODEL_PATH=${MODEL_PATH},MAX_LENGTH=${MAX_LENGTH},BATCH_SIZE=${INF_BATCH_SIZE},THRESHOLD=${THRESHOLD}"
+        if [ "${WINNER_TYPE}" = "finetune" ]; then
+            echo "    winner: finetune -> ${WINNER_PATH}"
+            SELECTED_JOB="${INF_JOB}"
+            INF_ENV="REPO_ROOT=${REPO_ROOT},CONDA_ENV=${CONDA_ENV},HF_HOME=${HF_HOME},REPL_OUTPUT_DIR=${REPL_LEN_DIR},VARIANT=${VARIANT},MODEL_PATH=${WINNER_PATH},MAX_LENGTH=${MAX_LENGTH},BATCH_SIZE=${INF_BATCH_SIZE},THRESHOLD=${THRESHOLD}"
+        else
+            echo "    winner: ${WINNER_TYPE} probe -> ${WINNER_HEAD}"
+            SELECTED_JOB="${PROBE_JOB}"
+            INF_ENV="REPO_ROOT=${REPO_ROOT},CONDA_ENV=${CONDA_ENV},HF_HOME=${HF_HOME},REPL_OUTPUT_DIR=${REPL_LEN_DIR},VARIANT=${VARIANT},BASE_MODEL=${BASE_MODEL},HEAD_TYPE=${WINNER_TYPE},HEAD_PATH=${WINNER_HEAD},SCALER_PATH=${WINNER_SCALER},MAX_LENGTH=${MAX_LENGTH},BATCH_SIZE=${INF_BATCH_SIZE},THRESHOLD=${THRESHOLD},POOLING=${POOLING}"
+        fi
 
         # Diagnostic inference (Surfaces A + B) — CANONICAL output names.
         for i in "${!RUN_NAMES[@]}"; do
@@ -268,7 +293,7 @@ for LEN in ${RUN_LENGTHS}; do
                 --error="${LOGDIR}/${JOB}_%j.err" \
                 "${INF_FLAGS[@]}" \
                 --export="ALL,${INF_ENV},INPUT_CSV=${CSV},OUTPUT_FILENAME=${OUT_NAME}" \
-                "${INF_JOB}"
+                "${SELECTED_JOB}"
             NUM_JOBS=$((NUM_JOBS + 1))
         done
 
@@ -286,7 +311,7 @@ for LEN in ${RUN_LENGTHS}; do
                     --error="${LOGDIR}/${JOB}_%j.err" \
                     "${INF_FLAGS[@]}" \
                     --export="ALL,${INF_ENV},INPUT_CSV=${csv},OUTPUT_FILENAME=genome_wide_${stem}_predictions.csv" \
-                    "${INF_JOB}"
+                    "${SELECTED_JOB}"
                 NUM_JOBS=$((NUM_JOBS + 1))
             done
         fi

@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 """
-Per-variant, pick the finetune seed with the highest test-set MCC.
+Per-variant, pick the best model to deploy for genome-wide + diagnostic inference:
+the highest-scoring of {fine-tuning, 3-layer NN probe, linear probe}. Fine-tuning
+is scored by the MEAN test MCC of its 5 seeds and, if it wins, is deployed via its
+single best seed; the probes are scored by their test MCC. FT is chosen only when
+its 5-seed average is >= both probes (mirrors the ProkBERT reference).
 
-GENERanno has a single architecture/checkpoint, so this selects the best-of-N
-seed for each variant (only finetune candidates; the embedding linear probe /
-3-layer NN are reported separately and are not part of the winning checkpoint).
+When a probe wins, run_lambda_inference.sh deploys it via inference_embedding_head.py
+(base model + the saved probe artifacts from embedding_analysis.py); no FT checkpoint.
 
-Writes <output_dir>/winners.json:
-    {
-      "generanno": {
-        "type": "finetune",
-        "seed": 3,
-        "test_mcc": 0.85,
-        "path": "<absolute path to the saved model dir (.../seed-N/best_model)>",
-        "results_dir": "<absolute path to the seed dir holding test_results.json>",
-        "base_model": "GenerTeam/GENERanno-prokaryote-0.5b-base",
-        "all_candidates": [{type, seed, test_mcc}, ...]
-      }
-    }
+Writes <output_dir>/winners.json, e.g.:
+    { "generanno": {                         # FT winner
+        "type": "finetune", "seed": 3, "test_mcc": 0.93 (=5-seed mean),
+        "best_seed_test_mcc": 0.94,
+        "path": ".../seed-3/best_model", "base_model": "...", "all_candidates": [...] } }
+    { "generanno": {                         # probe winner
+        "type": "three_layer_nn" | "linear_probe", "test_mcc": 0.97,
+        "head_path": ".../three_layer_nn_pretrained.pt",
+        "scaler_path": ".../three_layer_nn_pretrained_scaler.pkl",  # NN only
+        "base_model": "...", "all_candidates": [...] } }
 
 Where it reads from:
   The thin finetune job body (lambda_finetune_job.sh) calls
@@ -87,6 +88,36 @@ def collect_finetune_candidates(seed_root):
     return out
 
 
+def read_embedding_scores(embedding_dir):
+    """Linear-probe / 3-layer-NN candidates from embedding_analysis_results.json.
+
+    embedding_analysis.py writes FLAT keys (pretrained_linear_probe_mcc /
+    pretrained_nn_mcc) — the Table 2 test-MCC numbers — plus the deployable probe
+    artifacts saved alongside (linear_probe_pretrained.pkl,
+    three_layer_nn_pretrained.pt + three_layer_nn_pretrained_scaler.pkl).
+    """
+    results_path = os.path.join(embedding_dir, "embedding_analysis_results.json")
+    if not os.path.isfile(results_path):
+        print(f"  WARN: missing {results_path} (no probe candidates)", file=sys.stderr)
+        return []
+    with open(results_path) as f:
+        r = json.load(f)
+    out = []
+    lp = r.get("pretrained_linear_probe_mcc")
+    if lp is not None:
+        out.append({"type": "linear_probe", "seed": None, "test_mcc": float(lp),
+                    "head_path": os.path.abspath(
+                        os.path.join(embedding_dir, "linear_probe_pretrained.pkl"))})
+    nn = r.get("pretrained_nn_mcc")
+    if nn is not None:
+        out.append({"type": "three_layer_nn", "seed": None, "test_mcc": float(nn),
+                    "head_path": os.path.abspath(
+                        os.path.join(embedding_dir, "three_layer_nn_pretrained.pt")),
+                    "scaler_path": os.path.abspath(
+                        os.path.join(embedding_dir, "three_layer_nn_pretrained_scaler.pkl"))})
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -112,31 +143,52 @@ def main():
     for variant in args.variants:
         print(f"\n=== {variant} ===")
         seed_root = args.seed_root_template.replace("{variant}", variant)
+        embedding_dir = os.path.join(args.output_dir, "embedding", variant)
         print(f"  seed root: {seed_root}")
-        candidates = collect_finetune_candidates(seed_root)
-        if not candidates:
+        print(f"  embedding: {embedding_dir}")
+
+        ft = collect_finetune_candidates(seed_root)
+        emb = read_embedding_scores(embedding_dir)
+
+        # Build selection candidates: fine-tuning scored by the MEAN of its 5 seeds
+        # (deployed via the single best seed); each probe scored by its test MCC.
+        sel = []
+        if ft:
+            ft_avg = sum(c["test_mcc"] for c in ft) / len(ft)
+            best_seed = max(ft, key=lambda c: c["test_mcc"])
+            sel.append({"type": "finetune", "score": float(ft_avg), "seed": best_seed["seed"],
+                        "test_mcc": float(ft_avg), "best_seed_test_mcc": best_seed["test_mcc"],
+                        "path": best_seed["path"], "results_dir": best_seed["results_dir"]})
+        for cand in emb:
+            c = dict(cand); c["score"] = c["test_mcc"]
+            sel.append(c)
+
+        if not sel:
             if not args.allow_partial:
-                print(f"  ERROR: no candidates found for {variant} "
-                      f"(missing seed-*/test_results.json under {seed_root}). "
-                      f"Re-run with --allow-partial to skip and continue.",
+                print(f"  ERROR: no candidates for {variant} (no finetune seeds AND no "
+                      f"embedding_analysis_results.json). Re-run with --allow-partial to skip.",
                       file=sys.stderr)
                 sys.exit(1)
-            print(f"  SKIP: no candidates found for {variant}", file=sys.stderr)
+            print(f"  SKIP: no candidates for {variant}", file=sys.stderr)
             skipped.append(variant)
             continue
 
-        for c in sorted(candidates, key=lambda c: c["test_mcc"], reverse=True):
-            print(f"  test_mcc={c['test_mcc']:.4f}  seed-{c['seed']}")
+        def _tag(c):
+            return c["type"] + (f"/seed-{c['seed']}" if c.get("seed") is not None else "")
+        for c in sorted(sel, key=lambda c: c["score"], reverse=True):
+            note = "  (mean of 5 seeds)" if c["type"] == "finetune" else ""
+            print(f"  score={c['score']:.4f}  {_tag(c)}{note}")
 
-        winner = max(candidates, key=lambda c: c["test_mcc"])
+        # Highest score wins; ties prefer finetune (deploy FT only when its 5-seed
+        # average is >= both probes), per the LAMBDA design.
+        winner = max(sel, key=lambda c: (c["score"], c["type"] == "finetune"))
         winner["base_model"] = args.base_model
         winner["all_candidates"] = [
-            {k: v for k, v in c.items() if k in ("type", "seed", "test_mcc")}
-            for c in candidates
+            {k: v for k, v in c.items() if k in ("type", "seed", "test_mcc", "score")}
+            for c in sel
         ]
         winners[variant] = winner
-        print(f"  WINNER: seed-{winner['seed']} (test_mcc={winner['test_mcc']:.4f})")
-        print(f"          model path: {winner['path']}")
+        print(f"  WINNER: {_tag(winner)} (score={winner['score']:.4f})")
 
     os.makedirs(args.output_dir, exist_ok=True)
     out_path = os.path.join(args.output_dir, "winners.json")
