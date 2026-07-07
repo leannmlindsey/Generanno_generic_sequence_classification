@@ -10,6 +10,13 @@
 
 ---
 
+## Explore the Results
+
+See how GENERanno performs on the full LAMBDA genome-wide evaluation set, and compare it
+interactively against every other benchmarked model, on the LAMBDA benchmark dashboard:
+
+[https://leannmlindsey.github.io/lambda-benchmark/](https://leannmlindsey.github.io/lambda-benchmark/)
+
 ## Fine-tuning on Custom CSV Datasets
 
 This fork adds the ability to fine-tune on any classification task using simple CSV files.
