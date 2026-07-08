@@ -17,8 +17,15 @@
 # against each seed's test_results.json before trusting):
 #   2k -> seed 2 (0.8973)   4k -> seed 3 (0.9271)   8k -> seed 3 (0.9450)
 #
-# Submit FROM the GENERanno repo root on Delta, with the generanno env active:
+# Submit FROM the GENERanno repo root on Delta, with the generanno env active.
+# The compute nodes are OFFLINE (HF_HUB_OFFLINE=1), and the fine-tuned checkpoints do
+# not carry the tokenizer, so inference.py falls back to the base-model tokenizer. That
+# fallback only resolves offline if the base model (incl. its dynamic tokenizer.py) is
+# already in the cache. Use the pipeline's own prefetch step FIRST, on a LOGIN node. It
+# sources lambda_replication.conf, which sets the same HF_HOME this job hardcodes below,
+# so the two resolve the identical cache:
 #   conda activate /work/hdd/bfzj/llindsey1/conda/envs/generanno
+#   bash slurm_scripts/lambda_replication/prefetch_hf_cache.sh
 #   sbatch slurm_scripts/lambda_replication/run_generanno_ft_gw.sbatch
 set -uo pipefail
 
@@ -27,7 +34,11 @@ python -c "import torch, transformers" 2>/dev/null || { echo "ERROR: torch/trans
 
 export PYTHONNOUSERSITE=1 CUDA_VISIBLE_DEVICES=0 TOKENIZERS_PARALLELISM=false
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-export HF_HOME=${HF_HOME:-/work/hdd/bfzj/llindsey1/LAMBDA_REPLICATION/hf_cache}
+# Hardcode the exact HF_HOME from lambda_replication.conf (NOT a ${HF_HOME:-...} default),
+# so this offline job reads precisely the cache that prefetch_hf_cache.sh populated. A
+# bare shell default would let a stray HF_HOME point this job at the wrong cache (e.g. the
+# ProkBERT/NTv2 one that lacks the GENERanno base model) while prefetch wrote here.
+export HF_HOME=/work/hdd/bfzj/llindsey1/LAMBDA_REPLICATION/hf_cache
 
 REPO_ROOT="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "$REPO_ROOT"; export PYTHONPATH="${PWD}:${PYTHONPATH:-}"
