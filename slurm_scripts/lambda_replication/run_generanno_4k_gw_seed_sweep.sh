@@ -28,7 +28,16 @@
 #     bash slurm_scripts/lambda_replication/run_generanno_4k_gw_seed_sweep.sh
 #
 # Knobs (env overrides):
-#   SWEEP_SEEDS="1 2 4 5 3"   which seeds to run (default: all five, seed 3 = control)
+#   LEN=4k                    segment window: 2k | 4k | 8k (default 4k). MAX_LENGTH and
+#                             the genome-wide CSV dir are derived from it via the conf.
+#   SWEEP_SEEDS="1 2 4 5 3"   which seeds to run (default: all five, seed 3 = control).
+#                             For the FINAL FT genome-wide deployment (best-of-{LP,NN,FT}
+#                             tables), pass the single BEST fine-tuned seed for the window:
+#                               LEN=2k SWEEP_SEEDS=2 bash .../run_generanno_4k_gw_seed_sweep.sh
+#                               LEN=4k SWEEP_SEEDS=3 bash .../run_generanno_4k_gw_seed_sweep.sh
+#                               LEN=8k SWEEP_SEEDS=3 bash .../run_generanno_4k_gw_seed_sweep.sh
+#                             Each writes to inference/generanno_seed<N>/ (canonical
+#                             inference/generanno/ untouched); one job per genome, parallel.
 #   DRY_RUN=true              print the sbatch commands but submit nothing
 #
 # After the jobs finish, evaluate locally (per seed) with the same grid the paper
@@ -46,17 +55,18 @@ INF_JOB="${SCRIPT_DIR}/lambda_inference_job.sh"
 # shellcheck disable=SC1090
 source "${CONFIG}"
 
-LEN="4k"
+LEN="${LEN:-4k}"                                       # segment window: 2k | 4k | 8k
 SWEEP_SEEDS="${SWEEP_SEEDS:-1 2 4 5 3}"
 DRY_RUN="${DRY_RUN:-false}"
 
 REPL_LEN_DIR="${OUTPUT_DIR}/${LEN}"
 FT_ROOT="${REPL_LEN_DIR}/finetune/generanno"           # seed-<N>/best_model live here
-MAX_LENGTH="${MAX_LENGTH_4k:-4096}"
+# MAX_LENGTH and the genome-wide CSV dir are derived from LEN via the conf, so the
+# same launcher serves any window (indirect lookup on MAX_LENGTH_<LEN> / GENOME_WIDE_<LEN>).
+ml_var="MAX_LENGTH_${LEN}"; MAX_LENGTH="${!ml_var:-8192}"
 
-# genome-wide 4k CSV directory (same source the main driver uses).
-GW_PATH="${GENOME_WIDE_4k:-}"
-[ -n "${GW_PATH}" ] && [ -d "${GW_PATH}" ] || { echo "ERROR: GENOME_WIDE_4k not a dir: ${GW_PATH:-<unset>}"; exit 1; }
+gw_var="GENOME_WIDE_${LEN}"; GW_PATH="${!gw_var:-}"
+[ -n "${GW_PATH}" ] && [ -d "${GW_PATH}" ] || { echo "ERROR: GENOME_WIDE_${LEN} not a dir: ${GW_PATH:-<unset>}"; exit 1; }
 
 shopt -s nullglob
 GW_CSVS=( "${GW_PATH}"/*.csv )
